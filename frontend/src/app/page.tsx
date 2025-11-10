@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FileUpload } from '@/components/ui/file-upload';
 import { Button } from '@/components/ui/button';
-import { Loader2, CheckCircle2, Sparkles } from 'lucide-react';
+import { Loader2, CheckCircle2, Sparkles, Upload, FileText, Zap } from 'lucide-react';
 
 interface ProgressStep {
   step: string;
@@ -15,8 +15,7 @@ interface ProgressStep {
 
 export default function Home() {
   const router = useRouter();
-  const [loanEstimateFiles, setLoanEstimateFiles] = useState<File[]>([]);
-  const [closingDisclosureFiles, setClosingDisclosureFiles] = useState<File[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
@@ -31,13 +30,9 @@ export default function Home() {
     try {
       const formData = new FormData();
       
-      if (loanEstimateFiles.length > 0) {
-        formData.append('loanEstimate', loanEstimateFiles[0]);
-      }
-      
-      if (closingDisclosureFiles.length > 0) {
-        formData.append('closingDisclosure', closingDisclosureFiles[0]);
-      }
+      uploadedFiles.forEach(file => {
+        formData.append('documents', file);
+      });
 
       const response = await fetch('/api/upload', {
         method: 'POST',
@@ -65,17 +60,32 @@ export default function Home() {
             try {
               const data = JSON.parse(line.slice(6));
               if (data.step) {
-                setProgressSteps(prev => [...prev, { 
-                  ...data, 
-                  timestamp: Date.now(),
-                  status: data.step === 'complete' || data.step === 'done' ? 'completed' : data.step === 'error' ? 'error' : 'processing'
-                }]);
-                
+                setProgressSteps(prev => {
+                  const updatedPrev = prev.map((step, idx) => {
+                    if (idx === prev.length - 1 && step.status === 'processing') {
+                      return { ...step, status: 'completed' as const };
+                    }
+                    return step;
+                  });
+
+                  const newStatus = data.step === 'complete' || data.step === 'done'
+                    ? 'completed' as const
+                    : data.step === 'error'
+                    ? 'error' as const
+                    : 'processing' as const;
+
+                  return [...updatedPrev, {
+                    ...data,
+                    timestamp: Date.now(),
+                    status: newStatus
+                  }];
+                });
+
                 if (data.step === 'complete' || data.step === 'done') {
                   setUploadSuccess(true);
                   setTimeout(() => router.push('/data'), 1500);
                 }
-                
+
                 if (data.step === 'error') {
                   throw new Error(data.message);
                 }
@@ -96,61 +106,98 @@ export default function Home() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-zinc-950">
-      <main className="w-full max-w-7xl px-6 py-12">
+    <div className="flex min-h-screen items-center justify-center bg-white font-sans dark:bg-zinc-950">
+      <main className="w-full max-w-4xl px-6 py-12">
         {/* Header - hidden during processing */}
         {!isUploading && (
-          <div className="mb-12 text-center">
-            <h1 className="mb-4 text-4xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Document Upload Portal
+          <div className="mb-10 text-center">
+            <h1 className="mb-3 text-4xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-5xl">
+              TRID Analysis Portal
             </h1>
-            <p className="text-lg text-zinc-600 dark:text-zinc-400">
-              Upload your financial documents for review
+            <p className="text-lg text-zinc-600 dark:text-zinc-400 max-w-2xl mx-auto">
+              Intelligent document analysis for Loan Estimates and Closing Disclosures to ensure TRID compliance
             </p>
           </div>
         )}
 
         {/* Upload Form - only show when not uploading */}
         {!isUploading && (
-          <div className="space-y-8 rounded-xl bg-white p-8 shadow-sm dark:bg-zinc-900">
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-              <FileUpload
-                title="Loan Estimate Documents"
-                description="Upload one or more Loan Estimate PDF files"
-                accept=".pdf"
-                multiple={true}
-                onFilesChange={setLoanEstimateFiles}
-              />
+          <div className="space-y-6">
+            {/* Feature Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-zinc-100 dark:bg-zinc-800">
+                    <Upload className="h-5 w-5 text-zinc-900 dark:text-zinc-100" />
+                  </div>
+                  <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-50">
+                    Upload Documents
+                  </h3>
+                </div>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                  Upload LE and CD PDFs for automated analysis
+                </p>
+              </div>
 
-              <FileUpload
-                title="Closing Disclosure Documents"
-                description="Upload one or more Closing Disclosure PDF files"
-                accept=".pdf"
-                multiple={true}
-                onFilesChange={setClosingDisclosureFiles}
-              />
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-zinc-100 dark:bg-zinc-800">
+                    <Zap className="h-5 w-5 text-zinc-900 dark:text-zinc-100" />
+                  </div>
+                  <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-50">
+                    AI-Powered Analysis
+                  </h3>
+                </div>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                  Advanced AI extracts and validates data
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-zinc-100 dark:bg-zinc-800">
+                    <Sparkles className="h-5 w-5 text-zinc-900 dark:text-zinc-100" />
+                  </div>
+                  <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-50">
+                    TRID Compliance
+                  </h3>
+                </div>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                  Automatic tolerance validation and reporting
+                </p>
+              </div>
             </div>
 
-            <div className="border-t border-zinc-200 dark:border-zinc-800 pt-6 space-y-4">
-              {uploadError && (
-                <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-center dark:border-rose-900 dark:bg-rose-950">
-                  <p className="text-sm font-medium text-rose-900 dark:text-rose-100">
-                    {uploadError}
-                  </p>
-                </div>
-              )}
+            {/* Upload Card */}
+            <div className="space-y-6 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white p-8 shadow-lg dark:bg-zinc-900">
+              <FileUpload
+                title="Select PDF Files"
+                description="Drag and drop your PDF files here, or click to browse"
+                accept=".pdf"
+                multiple={true}
+                onFilesChange={setUploadedFiles}
+              />
 
-              <div className="flex justify-center">
-                <Button
-                  onClick={handleSubmit}
-                  disabled={
-                    loanEstimateFiles.length === 0 && closingDisclosureFiles.length === 0
-                  }
-                  className="min-w-[200px]"
-                  size="lg"
-                >
-                  Submit Documents
-                </Button>
+              <div className="border-t border-zinc-200 dark:border-zinc-800 pt-6 space-y-4">
+                {uploadError && (
+                  <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-center dark:border-rose-900 dark:bg-rose-950">
+                    <p className="text-sm font-medium text-rose-900 dark:text-rose-100">
+                      {uploadError}
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex justify-center">
+                  <Button
+                    onClick={handleSubmit}
+                    disabled={uploadedFiles.length === 0}
+                    className="min-w-[220px] bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 dark:text-zinc-900"
+                    size="lg"
+                  >
+                    <Zap className="mr-2 h-4 w-4" />
+                    Start Analysis
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
@@ -158,27 +205,24 @@ export default function Home() {
 
         {/* Processing Screen - Full screen takeover */}
         {isUploading && (
-          <div className="flex flex-col items-center justify-center min-h-[600px]">
-            {/* Header */}
-            <div className="text-center mb-12">
-               <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-linear-to-br from-blue-500 to-indigo-600 mb-4 shadow-lg">
-                <Loader2 className="h-8 w-8 text-white animate-spin" />
-              </div>
-              <h2 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
-                Processing Your Documents
+          <div className="flex flex-col items-center justify-center min-h-[80vh]">
+            {/* Processing Header */}
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+                Analyzing Documents
               </h2>
-              <p className="text-zinc-600 dark:text-zinc-400">
-                AI is analyzing your files and extracting data
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Our AI is processing your files and extracting data
               </p>
             </div>
 
-            {/* Progress Checklist */}
+            {/* Progress Checklist - Centered */}
             <div className="w-full max-w-2xl">
-              <div className="relative min-h-[400px]">
+              <div className="relative min-h-[400px] flex flex-col items-center justify-center">
                 {/* Progress Steps Container */}
-                <div className="space-y-3">
+                <div className="space-y-3 w-full bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-lg">
                   {progressSteps.map((step, idx) => {
-                    const isCompleted = step.status === 'completed' || step.step === 'complete' || step.step === 'done';
+                    const isCompleted = step.status === 'completed';
                     const isError = step.status === 'error';
 
                     return (
@@ -190,28 +234,24 @@ export default function Home() {
                           animationFillMode: 'forwards'
                         }}
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/50">
                           <div className="shrink-0">
                             {isCompleted ? (
-                              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-zinc-200 dark:bg-zinc-700">
+                                <CheckCircle2 className="h-4 w-4 text-zinc-900 dark:text-zinc-100" />
+                              </div>
                             ) : isError ? (
-                              <CheckCircle2 className="h-5 w-5 text-rose-500" />
+                              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-zinc-200 dark:bg-zinc-700">
+                                <CheckCircle2 className="h-4 w-4 text-zinc-900 dark:text-zinc-100" />
+                              </div>
                             ) : (
-                              <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />
+                              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-zinc-200 dark:bg-zinc-700">
+                                <Loader2 className="h-4 w-4 text-zinc-900 dark:text-zinc-100 animate-spin" />
+                              </div>
                             )}
                           </div>
 
-                          <p
-                            className={`
-                              text-sm font-medium
-                              ${isCompleted
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : isError
-                                ? 'text-rose-600 dark:text-rose-400'
-                                : 'text-zinc-900 dark:text-zinc-100'
-                              }
-                            `}
-                          >
+                          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
                             {step.message}
                           </p>
                         </div>
@@ -222,9 +262,11 @@ export default function Home() {
                   {/* Initial Loading State */}
                   {progressSteps.length === 0 && (
                     <div className="flex flex-col items-center justify-center py-12">
-                      <Loader2 className="h-12 w-12 animate-spin text-blue-500 mb-4" />
-                      <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                        Initializing...
+                      <div className="mb-4 inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-200 dark:bg-zinc-700">
+                        <Loader2 className="h-8 w-8 animate-spin text-zinc-900 dark:text-zinc-100" />
+                      </div>
+                      <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                        Initializing analysis engine...
                       </p>
                     </div>
                   )}
@@ -233,15 +275,17 @@ export default function Home() {
 
               {/* Success Message */}
               {uploadSuccess && (
-                <div className="mt-8 rounded-lg border border-emerald-200 bg-linear-to-r from-emerald-50 to-green-50 p-6 text-center dark:border-emerald-900 dark:from-emerald-950 dark:to-green-950 animate-fade-in">
+                <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-6 text-center dark:border-zinc-800 dark:bg-zinc-900 animate-fade-in shadow-lg">
                   <div className="flex items-center justify-center gap-3 mb-2">
-                    <Sparkles className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
-                    <h3 className="text-lg font-semibold text-emerald-900 dark:text-emerald-100">
-                      Processing Complete!
+                    <div className="flex items-center justify-center w-10 h-10 rounded-full bg-zinc-200 dark:bg-zinc-700">
+                      <Sparkles className="h-5 w-5 text-zinc-900 dark:text-zinc-100" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                      Analysis Complete!
                     </h3>
                   </div>
-                  <p className="text-sm text-emerald-700 dark:text-emerald-300">
-                    Redirecting to data page...
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Redirecting to results dashboard...
                   </p>
                 </div>
               )}

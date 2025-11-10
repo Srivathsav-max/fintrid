@@ -9,10 +9,9 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     
-    const loanEstimateFile = formData.get('loanEstimate') as File | null;
-    const closingDisclosureFile = formData.get('closingDisclosure') as File | null;
+    const documents = formData.getAll('documents') as File[];
 
-    if (!loanEstimateFile && !closingDisclosureFile) {
+    if (documents.length === 0) {
       const encoder = new TextEncoder();
       return new Response(
         encoder.encode('data: ' + JSON.stringify({ step: 'error', message: 'At least one file is required' }) + '\n\n'),
@@ -28,26 +27,11 @@ export async function POST(request: NextRequest) {
     }
 
     const backendFormData = new FormData();
-    const files: File[] = [];
-    const fileNames: Record<string, string> = {};
+    documents.forEach(file => {
+      backendFormData.append('files', file);
+    });
 
-    if (loanEstimateFile) {
-      backendFormData.append('files', loanEstimateFile);
-      files.push(loanEstimateFile);
-      fileNames.loanEstimate = loanEstimateFile.name;
-    }
-
-    if (closingDisclosureFile) {
-      backendFormData.append('files', closingDisclosureFile);
-      files.push(closingDisclosureFile);
-      fileNames.closingDisclosure = closingDisclosureFile.name;
-    }
-
-    if (files.length === 1) {
-      backendFormData.append('files', files[0]);
-    }
-
-    const backendResponse = await fetch(`${BACKEND_URL}/api/extract/pair/stream`, {
+    const backendResponse = await fetch(`${BACKEND_URL}/api/extract/stream`, {
       method: 'POST',
       body: backendFormData,
     });
@@ -117,33 +101,23 @@ export async function POST(request: NextRequest) {
 
           controller.enqueue(encoder.encode('data: ' + JSON.stringify({ step: 'saving', message: 'Saving to database' }) + '\n\n'));
 
-          const processedDocuments: Record<string, LoanEstimateRecord> = {};
+          let loanEstimateData: LoanEstimateRecord | null = null;
+          let closingDisclosureData: LoanEstimateRecord | null = null;
+          let loanEstimateFileName: string | null = null;
+          let closingDisclosureFileName: string | null = null;
 
           for (const fileInfo of backendData.files) {
             if (fileInfo.json_data) {
-              processedDocuments[fileInfo.source_file] = fileInfo.json_data;
-              console.log(`Processed ${fileInfo.source_file}:`, fileInfo.json_data);
+              console.log(`Processed ${fileInfo.source_file}: ${fileInfo.document_type}`);
+              
+              if (fileInfo.document_type === 'loan_estimate') {
+                loanEstimateData = fileInfo.json_data;
+                loanEstimateFileName = fileInfo.source_file;
+              } else if (fileInfo.document_type === 'closing_disclosure') {
+                closingDisclosureData = fileInfo.json_data;
+                closingDisclosureFileName = fileInfo.source_file;
+              }
             }
-          }
-
-          let loanEstimateData: LoanEstimateRecord | null = null;
-          let closingDisclosureData: LoanEstimateRecord | null = null;
-
-          if (loanEstimateFile && processedDocuments[loanEstimateFile.name]) {
-            loanEstimateData = processedDocuments[loanEstimateFile.name];
-            console.log('Found Loan Estimate data');
-          }
-
-          if (closingDisclosureFile && processedDocuments[closingDisclosureFile.name]) {
-            closingDisclosureData = processedDocuments[closingDisclosureFile.name];
-            console.log('Found Closing Disclosure data');
-          }
-
-          if (!loanEstimateData && closingDisclosureData) {
-            loanEstimateData = closingDisclosureData;
-          }
-          if (!closingDisclosureData && loanEstimateData) {
-            closingDisclosureData = loanEstimateData;
           }
 
           const primaryDoc = loanEstimateData || closingDisclosureData;
@@ -154,8 +128,8 @@ export async function POST(request: NextRequest) {
           const loanAmount = primaryDoc?.loan_terms?.loan_amount?.toString() || null;
 
           const valuesToInsert = {
-            loanEstimateFileName: fileNames.loanEstimate || null,
-            closingDisclosureFileName: fileNames.closingDisclosure || null,
+            loanEstimateFileName,
+            closingDisclosureFileName,
             loanId,
             applicantName,
             propertyAddress,
@@ -164,6 +138,8 @@ export async function POST(request: NextRequest) {
             loanEstimateData: loanEstimateData as any,
             closingDisclosureData: closingDisclosureData as any,
             tridComparison: backendData.trid_comparison as any,
+            financialSummary: backendData.financial_summary as any,
+            pdfReportPath: backendData.meta.pdf_report_path || null,
             processingStatus: 'completed' as const,
             backendPipeline: backendData.meta.pipeline,
             landingModel: backendData.meta.landing_model,

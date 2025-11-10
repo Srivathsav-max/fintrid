@@ -185,11 +185,23 @@ export interface TRIDComparison {
   processed_at: string;
 }
 
+export interface FinancialProfileSummary {
+  borrower_overview: string;
+  loan_overview: string;
+  cost_analysis: string;
+  trid_compliance: string;
+  key_changes: string[];
+  recommendations: string[];
+  risk_assessment: string;
+  generated_at: string;
+}
+
 export interface ProcessedFileResponse {
   source_file: string;
   json_path: string;
   markdown_path?: string | null;
   json_data: LoanEstimateRecord;
+  document_type?: "loan_estimate" | "closing_disclosure" | "unknown";
 }
 
 export interface BackendExtractResponse {
@@ -199,9 +211,12 @@ export interface BackendExtractResponse {
     gemini_model: string;
     saved_to: string;
     ai_matching_enabled?: boolean;
+    summary_generation_enabled?: boolean;
+    pdf_report_path?: string | null;
   };
   files: ProcessedFileResponse[];
   trid_comparison?: TRIDComparison | null;
+  financial_summary?: FinancialProfileSummary | null;
   errors?: string[] | null;
 }
 

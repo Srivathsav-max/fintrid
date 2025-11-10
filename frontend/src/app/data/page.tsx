@@ -41,9 +41,9 @@ import {
   tenGroupRenderer,
   unlimitedFeeRenderer,
 } from '@/components/handsontable/cell-renderers';
-import { ShieldAlert, Loader2, RefreshCw } from 'lucide-react';
+import { ShieldAlert, Loader2, RefreshCw, FileText } from 'lucide-react';
 import type { ExceptionEntry } from '@/types/trid';
-import type { LoanEstimateRecord, TRIDComparison } from '@/types/backend';
+import type { LoanEstimateRecord, TRIDComparison, FinancialProfileSummary } from '@/types/backend';
 import { transformTridData } from '@/lib/trid-transformer';
 import { transformAIMatchedData } from '@/lib/ai-trid-transformer';
 
@@ -59,9 +59,11 @@ interface TridRecord {
   loanEstimateData: LoanEstimateRecord | null;
   closingDisclosureData: LoanEstimateRecord | null;
   tridComparison: TRIDComparison | null;
+  financialSummary: FinancialProfileSummary | null;
   loanId: string | null;
   applicantName: string | null;
   createdAt: string;
+  pdfReportPath: string | null;
 }
 
 export default function DataHandsontablePage() {
@@ -129,7 +131,17 @@ export default function DataHandsontablePage() {
     [zeroA, zeroB, tenPercent, unlimitedRows]
   );
 
-  const cureTotal = zeroA.cureAmount + zeroB.cureAmount + tenPercent.overage;
+  const totalDifference = useMemo(() => {
+    const zeroADiff = zeroA.subtotalCD - zeroA.subtotalLE;
+    const zeroBDiff = zeroB.subtotalCD - zeroB.subtotalLE;
+    const tenPercentDiff = tenPercent.cdTotal - tenPercent.leBase;
+
+    const unlimitedDiff = unlimitedRows.reduce((sum, row) => {
+      return sum + (row.cd.borrower - row.le.borrower);
+    }, 0);
+
+    return zeroADiff + zeroBDiff + tenPercentDiff + unlimitedDiff;
+  }, [zeroA, zeroB, tenPercent, unlimitedRows]);
 
   if (isLoading) {
     return (
@@ -146,48 +158,33 @@ export default function DataHandsontablePage() {
 
   return (
     <div className="min-h-screen bg-white px-4 py-6 font-sans dark:bg-zinc-950">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-5">
-        {/* Record Selector */}
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+        {/* Dropdown and Refresh - Top Section */}
         {records.length > 0 && (
-          <div className="rounded-lg border bg-zinc-50 p-4 dark:bg-zinc-900">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex-1">
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
-                  Select Analysis Record
-                </label>
-                <select
-                  value={selectedRecordId || ''}
-                  onChange={(e) => setSelectedRecordId(Number(e.target.value))}
-                  className="w-full max-w-md rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-                >
-                  {records.map((record) => (
-                    <option key={record.id} value={record.id}>
-                      {record.applicantName || 'Unknown Applicant'} - Loan {record.loanId || 'N/A'} (
-                      {new Date(record.createdAt).toLocaleDateString()})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <Button
-                onClick={fetchRecords}
-                variant="outline"
-                size="sm"
-                className="h-9"
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex-1">
+              <select
+                value={selectedRecordId || ''}
+                onChange={(e) => setSelectedRecordId(Number(e.target.value))}
+                className="w-full max-w-md rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
               >
-                <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                Refresh
-              </Button>
+                {records.map((record) => (
+                  <option key={record.id} value={record.id}>
+                    {record.applicantName || 'Unknown Applicant'} - Loan {record.loanId || 'N/A'} (
+                    {new Date(record.createdAt).toLocaleDateString()})
+                  </option>
+                ))}
+              </select>
             </div>
-            {selectedRecord && (
-              <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground border-t border-zinc-200 dark:border-zinc-800 pt-3">
-                {selectedRecord.loanEstimateData?.meta?.source_file && (
-                  <span>LE: {selectedRecord.loanEstimateData.meta.source_file}</span>
-                )}
-                {selectedRecord.closingDisclosureData?.meta?.source_file && (
-                  <span>CD: {selectedRecord.closingDisclosureData.meta.source_file}</span>
-                )}
-              </div>
-            )}
+            <Button
+              onClick={fetchRecords}
+              variant="outline"
+              size="sm"
+              className="h-9"
+            >
+              <RefreshCw className="mr-2 h-3.5 w-3.5" />
+              Refresh
+            </Button>
           </div>
         )}
 
@@ -205,45 +202,113 @@ export default function DataHandsontablePage() {
           </div>
         )}
 
-        {/* Header */}
-        {records.length > 0 && (
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-                  TRID TOLERANCE VALIDATOR - DATABASE RECORDS
-                </p>
+        {/* Borrower Name and Address */}
+        {selectedRecord && (
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <div className="flex items-center gap-3 flex-wrap">
                 <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
-                  Loan Estimate vs Closing Disclosure
+                  {selectedRecord.applicantName || 'Unknown Applicant'}
                 </h1>
+                {selectedRecord.pdfReportPath && (
+                  <Button
+                    onClick={() => window.open(`/pdf-report?path=${encodeURIComponent(selectedRecord.pdfReportPath || '')}`, '_blank')}
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                  >
+                    <FileText className="mr-2 h-3.5 w-3.5" />
+                    Preview TRID Report
+                  </Button>
+                )}
               </div>
-            <div className="rounded-lg border bg-zinc-50 p-4 shadow-sm dark:bg-zinc-900">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-                    CURE METER
-                  </p>
-                  <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 mt-1">
-                    {formatUSD(cureTotal)}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Zero {formatUSD(zeroA.cureAmount + zeroB.cureAmount)} + 10%{' '}
-                    {formatUSD(tenPercent.overage)}
-                  </p>
-                </div>
-                <Button size="sm" variant="secondary" className="h-8 text-xs">
-                  Export Letter
-                </Button>
+              <p className="text-sm text-muted-foreground mt-1">
+                Loan ID: {selectedRecord.loanId || 'N/A'}
+              </p>
+            </div>
+            <div className="text-left md:text-right">
+              <p className="text-sm text-zinc-700 dark:text-zinc-300">
+                {selectedRecord.loanEstimateData?.property?.address ||
+                 selectedRecord.closingDisclosureData?.property?.address ||
+                 'Address not available'}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Analysis Date: {new Date(selectedRecord.createdAt).toLocaleDateString()}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Borrower Overview and Loan Overview */}
+        {selectedRecord?.financialSummary && (
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">
+                Borrower Overview
+              </h2>
+              <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line">
+                {selectedRecord.financialSummary.borrower_overview}
+              </div>
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">
+                Loan Overview
+              </h2>
+              <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line">
+                {selectedRecord.financialSummary.loan_overview}
               </div>
             </div>
           </div>
-        </div>
         )}
 
+        {/* Cost Analysis */}
+        {selectedRecord?.financialSummary && (
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">
+              Cost Analysis
+            </h2>
+            <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line">
+              {selectedRecord.financialSummary.cost_analysis}
+            </div>
+          </div>
+        )}
+
+        {/* TRID Analysis - Loan Estimate vs Closing Disclosure */}
         {records.length > 0 && (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="space-y-3">
-            {/* Section A: Origination (Zero Tolerance) */}
+        <>
+          <div className="border-t border-zinc-200 dark:border-zinc-800 pt-6">
+            <div className="flex flex-wrap items-baseline justify-between gap-4 mb-4">
+              <div>
+                <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-1">
+                  Loan Estimate vs Closing Disclosure
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  TRID tolerance validation and fee comparison
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
+                  Total Difference
+                </p>
+                <p className={`text-2xl font-bold mt-1 ${
+                  totalDifference > 0
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : totalDifference < 0
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-zinc-900 dark:text-zinc-50'
+                }`}>
+                  {totalDifference > 0 ? '+' : ''}{formatUSD(totalDifference)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  CD vs LE (borrower paid)
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="space-y-3">
+              {/* Section A: Origination (Zero Tolerance) */}
             <section className="space-y-1.5">
               <div className="flex items-center gap-2 pb-1">
                 <Badge variant="secondary" className="text-xs font-semibold px-2.5 py-1">
@@ -501,7 +566,66 @@ export default function DataHandsontablePage() {
               )}
             </div>
           </div>
-        </div>
+          </div>
+        </>
+        )}
+
+        {/* TRID Compliance Status */}
+        {selectedRecord?.financialSummary && (
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">
+              TRID Compliance Status
+            </h2>
+            <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line">
+              {selectedRecord.financialSummary.trid_compliance}
+            </div>
+          </div>
+        )}
+
+        {/* Key Changes from LE to CD */}
+        {selectedRecord?.financialSummary?.key_changes && selectedRecord.financialSummary.key_changes.length > 0 && (
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">
+              Key Changes from LE to CD
+            </h2>
+            <ul className="space-y-2">
+              {selectedRecord.financialSummary.key_changes.map((change, idx) => (
+                <li key={idx} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                  <span className="text-blue-500 mt-1">•</span>
+                  <span>{change}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Recommendations */}
+        {selectedRecord?.financialSummary?.recommendations && selectedRecord.financialSummary.recommendations.length > 0 && (
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">
+              Recommendations
+            </h2>
+            <ul className="space-y-2">
+              {selectedRecord.financialSummary.recommendations.map((rec, idx) => (
+                <li key={idx} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                  <span className="text-emerald-500 mt-1">•</span>
+                  <span>{rec}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Risk Assessment */}
+        {selectedRecord?.financialSummary && (
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">
+              Risk Assessment
+            </h2>
+            <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line">
+              {selectedRecord.financialSummary.risk_assessment}
+            </div>
+          </div>
         )}
       </div>
     </div>

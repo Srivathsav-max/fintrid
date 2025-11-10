@@ -310,7 +310,6 @@ export function transformUnlimited(
     }
   });
 
-  // Process CD items
   cdFItems.forEach((item) => {
     if (item.label) {
       const normalized = normalizeFee(item.label);

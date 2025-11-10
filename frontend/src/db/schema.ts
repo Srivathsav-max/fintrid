@@ -15,6 +15,8 @@ export const tridAnalysisTable = pgTable("trid_analysis", {
   loanEstimateData: jsonb("loan_estimate_data"),
   closingDisclosureData: jsonb("closing_disclosure_data"),
   tridComparison: jsonb("trid_comparison"),
+  financialSummary: jsonb("financial_summary"),
+  pdfReportPath: varchar("pdf_report_path", { length: 500 }),
   processingStatus: varchar("processing_status", { length: 50 }).default("pending").notNull(),
   errorMessage: text("error_message"),  
   backendPipeline: varchar("backend_pipeline", { length: 200 }),

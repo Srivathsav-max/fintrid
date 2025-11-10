@@ -58,6 +58,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "landingai-ade>=0.20.3",
     "langchain-google-genai>=3.0.1",
+    "reportlab>=4.4.4",
 ]
 
 [tool.hatch.build.targets.wheel]
