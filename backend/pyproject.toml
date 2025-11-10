@@ -57,6 +57,7 @@ dependencies = [
     "pdf2image>=1.17.0",
     "python-dotenv>=1.2.1",
     "landingai-ade>=0.20.3",
+    "langchain-google-genai>=3.0.1",
 ]
 
 [tool.hatch.build.targets.wheel]
