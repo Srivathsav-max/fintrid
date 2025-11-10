@@ -3,7 +3,7 @@ name = "fintrid-backend"
 version = "0.1.0"
 description = "Backend API for Fintrid financial application"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -51,6 +51,12 @@ dependencies = [
     "pypdf2>=3.0.1",
     "langchain>=1.0.5",
     "plotly>=5.18.0",
+    "sqlalchemy>=2.0.44",
+    "rapidfuzz>=3.14.3",
+    "pymupdf>=1.26.6",
+    "pdf2image>=1.17.0",
+    "python-dotenv>=1.2.1",
+    "landingai-ade>=0.20.3",
 ]
 
 [tool.hatch.build.targets.wheel]
