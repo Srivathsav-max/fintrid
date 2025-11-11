@@ -41,7 +41,7 @@ import {
   tenGroupRenderer,
   unlimitedFeeRenderer,
 } from '@/components/handsontable/cell-renderers';
-import { ShieldAlert, Loader2, RefreshCw, FileText } from 'lucide-react';
+import { ShieldAlert, Loader2, RefreshCw, FileText, Highlighter } from 'lucide-react';
 import type { ExceptionEntry } from '@/types/trid';
 import type { LoanEstimateRecord, TRIDComparison, FinancialProfileSummary } from '@/types/backend';
 import { transformTridData } from '@/lib/trid-transformer';
@@ -109,6 +109,12 @@ export default function DataHandsontablePage() {
     }
   };
 
+  const openPdf = (path?: string | null) => {
+    if (!path) return;
+    window.open(`/pdf-report?path=${encodeURIComponent(path)}`, '_blank');
+  };
+
+
   const lenderCredits = useMemo(() => {
     const record = records.find((r) => r.id === selectedRecordId);
     return record?.closingDisclosureData?.closing_cost_details?.other_costs?.lender_credits || 0;
@@ -160,6 +166,9 @@ export default function DataHandsontablePage() {
   }
 
   const selectedRecord = records.find((r) => r.id === selectedRecordId);
+  const highlightBundle = selectedRecord?.tridComparison?.pdf_highlights;
+  const leHighlightPath = highlightBundle?.loan_estimate?.highlighted_pdf_path || null;
+  const cdHighlightPath = highlightBundle?.closing_disclosure?.highlighted_pdf_path || null;
 
   return (
     <div className="min-h-screen bg-white px-4 py-6 font-sans dark:bg-zinc-950">
@@ -215,16 +224,42 @@ export default function DataHandsontablePage() {
                 <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
                   {selectedRecord.applicantName || 'Unknown Applicant'}
                 </h1>
-                {selectedRecord.pdfReportPath && (
-                  <Button
-                    onClick={() => window.open(`/pdf-report?path=${encodeURIComponent(selectedRecord.pdfReportPath || '')}`, '_blank')}
-                    variant="outline"
-                    size="sm"
-                    className="h-8"
-                  >
-                    <FileText className="mr-2 h-3.5 w-3.5" />
-                    Preview TRID Report
-                  </Button>
+                {(selectedRecord.pdfReportPath || leHighlightPath || cdHighlightPath) && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {selectedRecord.pdfReportPath && (
+                      <Button
+                        onClick={() => openPdf(selectedRecord.pdfReportPath)}
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                      >
+                        <FileText className="mr-2 h-3.5 w-3.5" />
+                        TRID Report
+                      </Button>
+                    )}
+                    {leHighlightPath && (
+                      <Button
+                        onClick={() => openPdf(leHighlightPath)}
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                      >
+                        <Highlighter className="mr-2 h-3.5 w-3.5" />
+                        LE Highlights
+                      </Button>
+                    )}
+                    {cdHighlightPath && (
+                      <Button
+                        onClick={() => openPdf(cdHighlightPath)}
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                      >
+                        <Highlighter className="mr-2 h-3.5 w-3.5" />
+                        CD Highlights
+                      </Button>
+                    )}
+                  </div>
                 )}
               </div>
               <p className="text-sm text-muted-foreground mt-1">
@@ -651,6 +686,78 @@ export default function DataHandsontablePage() {
             </h2>
             <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line">
               {selectedRecord.financialSummary.risk_assessment}
+            </div>
+          </div>
+        )}
+
+        {(leHighlightPath || cdHighlightPath) && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-1">
+                  PDF Diff Viewer (Highlighted)
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  Review the annotated PDFs with color-coded boxes that surface LE vs CD changes.
+                </p>
+              </div>
+              {highlightBundle?.legend && (
+                <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                  {Object.entries(highlightBundle.legend).map(([key, entry]) => (
+                    <span key={key} className="inline-flex items-center gap-2">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full border border-transparent"
+                        style={{ backgroundColor: entry.color || '#a1a1aa' }}
+                      />
+                      {entry.description}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-xl border bg-white shadow-sm dark:bg-zinc-900 dark:border-zinc-800 overflow-hidden">
+                <div className="flex items-center justify-between border-b px-4 py-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 dark:border-zinc-800">
+                  <span>Loan Estimate Highlights</span>
+                  {leHighlightPath && (
+                    <Button size="sm" variant="ghost" className="text-xs" onClick={() => openPdf(leHighlightPath)}>
+                      Open
+                    </Button>
+                  )}
+                </div>
+                {leHighlightPath ? (
+                  <iframe
+                    src={`/api/pdf-viewer?path=${encodeURIComponent(leHighlightPath)}`}
+                    className="h-[520px] w-full border-0"
+                    title="Loan Estimate Highlights"
+                  />
+                ) : (
+                  <div className="flex h-[520px] items-center justify-center text-sm text-muted-foreground px-6 text-center">
+                    Highlighted Loan Estimate PDF not available.
+                  </div>
+                )}
+              </div>
+              <div className="rounded-xl border bg-white shadow-sm dark:bg-zinc-900 dark:border-zinc-800 overflow-hidden">
+                <div className="flex items-center justify-between border-b px-4 py-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 dark:border-zinc-800">
+                  <span>Closing Disclosure Highlights</span>
+                  {cdHighlightPath && (
+                    <Button size="sm" variant="ghost" className="text-xs" onClick={() => openPdf(cdHighlightPath)}>
+                      Open
+                    </Button>
+                  )}
+                </div>
+                {cdHighlightPath ? (
+                  <iframe
+                    src={`/api/pdf-viewer?path=${encodeURIComponent(cdHighlightPath)}`}
+                    className="h-[520px] w-full border-0"
+                    title="Closing Disclosure Highlights"
+                  />
+                ) : (
+                  <div className="flex h-[520px] items-center justify-center text-sm text-muted-foreground px-6 text-center">
+                    Highlighted Closing Disclosure PDF not available.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

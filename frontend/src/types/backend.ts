@@ -177,12 +177,54 @@ export interface MatchedFee {
   tolerance_category: "zero" | "ten_percent" | "unlimited";
   provider_name?: string | null;
   is_new: boolean;
+  chosen_from_list?: boolean | null;
+  changed_circumstance?: boolean | null;
+}
+
+export type FeeDiffType =
+  | "increase"
+  | "decrease"
+  | "missing_on_cd"
+  | "new_on_cd"
+  | "reclassified_off_borrower";
+
+export interface FeeDiffSummary {
+  fee_name?: string | null;
+  section?: string | null;
+  tolerance_category?: string | null;
+  le_label?: string | null;
+  cd_label?: string | null;
+  le_amount?: Currency | null;
+  cd_amount?: Currency | null;
+  difference?: Currency | null;
+  diff_type: FeeDiffType;
+  match_confidence?: number | null;
+  is_new?: boolean | null;
+  provider_name?: string | null;
+  reclassified_to?: "seller" | "other" | null;
+  reclassified_amount?: Currency | null;
+}
+
+export interface PdfHighlightAsset {
+  source_pdf_path?: string | null;
+  highlighted_pdf_path?: string | null;
+  page_count?: number | null;
+  annotation_count?: number | null;
+  generated_at?: string | null;
+}
+
+export interface PdfHighlightBundle {
+  loan_estimate?: PdfHighlightAsset | null;
+  closing_disclosure?: PdfHighlightAsset | null;
+  legend?: Record<string, { description: string; color: string }>;
 }
 
 export interface TRIDComparison {
   matched_fees: MatchedFee[];
   summary: Record<string, any>;
   processed_at: string;
+  diff_summary?: FeeDiffSummary[];
+  pdf_highlights?: PdfHighlightBundle | null;
 }
 
 export interface FinancialProfileSummary {
@@ -202,6 +244,7 @@ export interface ProcessedFileResponse {
   markdown_path?: string | null;
   json_data: LoanEstimateRecord;
   document_type?: "loan_estimate" | "closing_disclosure" | "unknown";
+  pdf_path?: string | null;
 }
 
 export interface BackendExtractResponse {
@@ -213,10 +256,10 @@ export interface BackendExtractResponse {
     ai_matching_enabled?: boolean;
     summary_generation_enabled?: boolean;
     pdf_report_path?: string | null;
+    pdf_highlights_enabled?: boolean;
   };
   files: ProcessedFileResponse[];
   trid_comparison?: TRIDComparison | null;
   financial_summary?: FinancialProfileSummary | null;
   errors?: string[] | null;
 }
-

@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
 import tempfile
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List, Literal, Any, AsyncIterator
+from typing import Optional, Dict, List, Literal, Any, AsyncIterator, Tuple
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
+
+import pdfplumber
+from PyPDF2 import PdfReader, PdfWriter
+from rapidfuzz import fuzz
+from reportlab.pdfgen import canvas
 
 from fintrid_backend.generate_trid_curated_report import (
     build_trid_curated_report,
@@ -291,6 +298,47 @@ class MatchedFee(BaseModel):
         default=False,
         description="True if fee exists in CD but not in LE (new fee)",
     )
+    chosen_from_list: Optional[bool] = Field(
+        None,
+        description="True if borrower selected the provider from the creditor's written list (Section C handling)",
+    )
+    changed_circumstance: Optional[bool] = Field(
+        default=False,
+        description="Flag if a valid changed circumstance applies to this fee",
+    )
+
+
+class FeeDiffSummary(BaseModel):
+    fee_name: Optional[str] = None
+    section: Optional[str] = None
+    tolerance_category: Optional[str] = None
+    le_label: Optional[str] = None
+    cd_label: Optional[str] = None
+    le_amount: Optional[Currency] = None
+    cd_amount: Optional[Currency] = None
+    difference: Optional[Currency] = None
+    diff_type: Literal[
+        "increase", "decrease", "missing_on_cd", "new_on_cd", "reclassified_off_borrower"
+    ]
+    match_confidence: Optional[float] = None
+    is_new: Optional[bool] = None
+    provider_name: Optional[str] = None
+    reclassified_to: Optional[Literal["seller", "other"]] = None
+    reclassified_amount: Optional[Currency] = None
+
+
+class PdfHighlightAsset(BaseModel):
+    source_pdf_path: Optional[str] = None
+    highlighted_pdf_path: Optional[str] = None
+    page_count: Optional[int] = None
+    annotation_count: Optional[int] = None
+    generated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+class PdfHighlightBundle(BaseModel):
+    loan_estimate: Optional[PdfHighlightAsset] = None
+    closing_disclosure: Optional[PdfHighlightAsset] = None
+    legend: Optional[Dict[str, str]] = None
 
 
 class TRIDComparison(BaseModel):
@@ -298,6 +346,8 @@ class TRIDComparison(BaseModel):
     matched_fees: List[MatchedFee] = Field(default_factory=list)
     summary: Optional[Dict[str, Any]] = Field(default_factory=dict)
     processed_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    diff_summary: List[FeeDiffSummary] = Field(default_factory=list)
+    pdf_highlights: Optional[PdfHighlightBundle] = None
 
 
 class FinancialProfileSummary(BaseModel):
@@ -395,6 +445,715 @@ CRITICAL: Exclude all fees with zero or null borrower amounts. Only return fees 
 
 Return a complete TRIDComparison with all matched BORROWER-PAID fees.
 """
+
+
+DIFF_EPSILON = 0.01
+SECTION_HEADER_PATTERN = re.compile(r"^([A-H])\.\s", re.IGNORECASE)
+E_RECORDING_TOKENS = {
+    "recording",
+    "deed recording",
+    "mortgage recording",
+    "recording fee",
+    "recordation",
+}
+E_TRANSFER_TAX_TOKENS = {
+    "transfer tax",
+    "transfer taxes",
+    "intangible tax",
+    "doc stamp",
+    "documentary stamp",
+    "stamp tax",
+}
+
+
+def classify_fee_tolerance(
+    section: Optional[str],
+    label: Optional[str],
+    chosen_from_list: Optional[bool],
+    changed_circumstance: Optional[bool],
+) -> str:
+    sec = (section or "").strip().upper()
+    text = (label or "").lower()
+
+    if sec == "A":
+        return "zero"
+
+    if sec == "B":
+        if changed_circumstance:
+            return "unlimited"
+        return "zero"
+
+    if sec == "C":
+        return "ten_percent" if chosen_from_list else "unlimited"
+
+    if sec == "E":
+        if any(token in text for token in E_TRANSFER_TAX_TOKENS):
+            return "zero"
+        if any(token in text for token in E_RECORDING_TOKENS):
+            return "ten_percent"
+        return "ten_percent"
+
+    if sec in {"F", "G", "H"}:
+        return "unlimited"
+
+    return "unlimited"
+
+
+def compute_tolerance_metrics(matched_fees: List[Dict[str, Any]]) -> Dict[str, Any]:
+    bucket_totals: Dict[str, Dict[str, float]] = {
+        "zero": {"le_sum": 0.0, "cd_sum": 0.0, "count": 0},
+        "ten_percent": {"le_sum": 0.0, "cd_sum": 0.0, "count": 0},
+        "unlimited": {"le_sum": 0.0, "cd_sum": 0.0, "count": 0},
+    }
+
+    for fee in matched_fees:
+        tol = fee.get("tolerance_category") or "unlimited"
+        tol = tol if tol in bucket_totals else "unlimited"
+        le = float(fee.get("le_amount") or 0.0)
+        cd = float(fee.get("cd_amount") or 0.0)
+        bucket_totals[tol]["le_sum"] += le
+        bucket_totals[tol]["cd_sum"] += cd
+        bucket_totals[tol]["count"] += 1
+
+    ten = bucket_totals["ten_percent"]
+    limit = round(ten["le_sum"] * 1.10, 2)
+    cure = max(0.0, round(ten["cd_sum"] - limit, 2))
+
+    ten_percent_test = {
+        "le_sum": round(ten["le_sum"], 2),
+        "cd_sum": round(ten["cd_sum"], 2),
+        "limit": limit,
+        "cure_required": cure,
+    }
+
+    for bucket in bucket_totals.values():
+        bucket["le_sum"] = round(bucket["le_sum"], 2)
+        bucket["cd_sum"] = round(bucket["cd_sum"], 2)
+
+    return {
+        "bucket_totals": bucket_totals,
+        "ten_percent_test": ten_percent_test,
+    }
+
+
+def _normalize_label_for_key(label: Optional[str]) -> str:
+    if not label:
+        return ""
+    text = label.lower()
+    text = re.sub(r"^\s*\d{2}\s*[-.:)]?\s*", "", text)
+    text = re.sub(r"\bto\b.+$", "", text)
+    text = text.replace("owner’s", "owners").replace("owner's", "owners")
+    text = text.replace("fee", "")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _build_cd_label_index(cd_record: dict) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+
+    def section_items(sec: str) -> List[dict]:
+        bag = "loan_costs" if sec in {"A", "B", "C"} else "other_costs"
+        return (
+            cd_record.get("closing_cost_details", {})
+            .get(bag, {})
+            .get(sec, {})
+            .get("items", [])
+            or []
+        )
+
+    for sec in ["A", "B", "C", "E", "F", "G", "H"]:
+        for item in section_items(sec):
+            label = item.get("label") or ""
+            key = f"{sec}:{_normalize_label_for_key(label)}"
+            entry = index.setdefault(
+                key,
+                {
+                    "section": sec,
+                    "label": label,
+                    "borrower": 0.0,
+                    "seller": 0.0,
+                    "other": 0.0,
+                },
+            )
+            amount = float(item.get("amount") or 0.0)
+            sub_label = (item.get("sub_label") or "").lower()
+            if sub_label.startswith("borrower_paid"):
+                entry["borrower"] += amount
+            elif sub_label.startswith("seller_paid"):
+                entry["seller"] += amount
+            elif sub_label == "paid_by_others":
+                entry["other"] += amount
+    return index
+
+
+PDF_COLOR_SCHEME = {
+    "loan_estimate_change": {
+        "rgb": (14, 165, 233),
+        "hex": "#0EA5E9",
+        "description": "Loan Estimate fee changed vs Closing Disclosure",
+    },
+    "loan_estimate_missing": {
+        "rgb": (249, 115, 22),
+        "hex": "#F97316",
+        "description": "Fee missing on Closing Disclosure (highlighted on LE)",
+    },
+    "closing_disclosure_change": {
+        "rgb": (190, 24, 93),
+        "hex": "#BE185D",
+        "description": "Closing Disclosure fee changed vs Loan Estimate",
+    },
+    "closing_disclosure_new": {
+        "rgb": (22, 163, 74),
+        "hex": "#16A34A",
+        "description": "New fee introduced on Closing Disclosure",
+    },
+}
+
+
+def build_fee_diff_summary(matched_fees: List[dict]) -> List[Dict[str, Any]]:
+    """Derive per-fee difference metadata for downstream consumers."""
+    summary: List[Dict[str, Any]] = []
+    for fee in matched_fees:
+        fee_dict = fee if isinstance(fee, dict) else fee.dict()  # type: ignore[arg-type]
+        le_amount = fee_dict.get("le_amount")
+        cd_amount = fee_dict.get("cd_amount")
+        reclassified_to = fee_dict.get("reclassified_to")
+
+        diff_type: Optional[str] = None
+        diff_value: Optional[float] = None
+
+        if le_amount is None and cd_amount is None:
+            continue
+
+        if cd_amount is None and le_amount is not None and reclassified_to:
+            diff_type = "reclassified_off_borrower"
+            diff_value = -float(le_amount)
+        elif le_amount is None and cd_amount is not None:
+            diff_type = "new_on_cd"
+        elif cd_amount is None and le_amount is not None:
+            diff_type = "missing_on_cd"
+            diff_value = -float(le_amount)
+        else:
+            diff_value = float(cd_amount) - float(le_amount)
+            if abs(diff_value) < DIFF_EPSILON:
+                continue
+            diff_type = "increase" if diff_value > 0 else "decrease"
+
+        if diff_type is None:
+            continue
+
+        summary.append(
+            {
+                "fee_name": fee_dict.get("fee_name"),
+                "section": fee_dict.get("section"),
+                "tolerance_category": fee_dict.get("tolerance_category"),
+                "le_label": fee_dict.get("le_label") or fee_dict.get("fee_name"),
+                "cd_label": fee_dict.get("cd_label") or fee_dict.get("fee_name"),
+                "le_amount": le_amount,
+                "cd_amount": cd_amount,
+                "difference": diff_value,
+                "diff_type": diff_type,
+                "match_confidence": fee_dict.get("match_confidence"),
+                "is_new": fee_dict.get("is_new"),
+                "provider_name": fee_dict.get("provider_name"),
+                "reclassified_to": reclassified_to,
+                "reclassified_amount": fee_dict.get("reclassified_amount"),
+            }
+        )
+    return summary
+
+
+def _normalize_text(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _normalize_for_fuzz(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    text = value.lower()
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _tokenize_text(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    return re.findall(r"[a-z0-9]+", value.lower())
+
+
+def _normalize_amount_digits(value: Optional[float]) -> Optional[str]:
+    if value is None:
+        return None
+    formatted = f"{float(value):,.2f}"
+    digits = re.sub(r"[^0-9]", "", formatted)
+    return digits or None
+
+
+def _cluster_words_into_lines(words: List[dict], y_tol: float = 3.0) -> List[Dict[str, Any]]:
+    lines: List[Dict[str, Any]] = []
+    for word in sorted(words, key=lambda w: (w["top"], w["x0"])):
+        matched_line: Optional[Dict[str, Any]] = None
+        for line in lines:
+            if abs(line["top"] - word["top"]) <= y_tol:
+                matched_line = line
+                break
+        if matched_line is None:
+            matched_line = {
+                "top": word["top"],
+                "bottom": word["bottom"],
+                "x0": word["x0"],
+                "x1": word["x1"],
+                "words": [word],
+            }
+            lines.append(matched_line)
+        else:
+            matched_line["top"] = min(matched_line["top"], word["top"])
+            matched_line["bottom"] = max(matched_line["bottom"], word["bottom"])
+            matched_line["x0"] = min(matched_line["x0"], word["x0"])
+            matched_line["x1"] = max(matched_line["x1"], word["x1"])
+            matched_line["words"].append(word)
+
+    for line in lines:
+        ordered_words = sorted(line["words"], key=lambda w: w["x0"])
+        text = " ".join(w["text"] for w in ordered_words).strip()
+        line["text"] = text
+        line["norm_text"] = _normalize_text(text)
+        line["digits"] = re.sub(r"[^0-9]", "", text)
+        line["fuzzy_text"] = _normalize_for_fuzz(text)
+        line["tokens"] = _tokenize_text(text)
+        line["mid_y"] = (line["top"] + line["bottom"]) / 2
+    return lines
+
+
+def _extract_pdf_pages(pdf_path: Path) -> List[Dict[str, Any]]:
+    pages: List[Dict[str, Any]] = []
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for index, page in enumerate(pdf.pages):
+            words = page.extract_words(
+                x_tolerance=1.5, y_tolerance=0.5, keep_blank_chars=False, use_text_flow=True
+            )
+            lines = _cluster_words_into_lines(words)
+            section_markers: List[Dict[str, Any]] = []
+            for line in lines:
+                text = (line.get("text") or "").strip()
+                match = SECTION_HEADER_PATTERN.match(text)
+                if match:
+                    section_markers.append(
+                        {
+                            "section": match.group(1).upper(),
+                            "top": line["top"],
+                        }
+                    )
+            section_ranges: Dict[str, Tuple[float, float]] = {}
+            for idx, marker in enumerate(section_markers):
+                start = marker["top"]
+                end = (
+                    section_markers[idx + 1]["top"]
+                    if idx + 1 < len(section_markers)
+                    else page.height
+                )
+                section_ranges[marker["section"]] = (start, end)
+            pages.append(
+                {
+                    "index": index,
+                    "width": page.width,
+                    "height": page.height,
+                    "lines": lines,
+                    "section_ranges": section_ranges,
+                }
+            )
+    return pages
+
+
+def _resolve_color(doc_type: str, diff_type: str) -> Dict[str, Any]:
+    if doc_type == "loan_estimate":
+        key = "loan_estimate_missing" if diff_type == "missing_on_cd" else "loan_estimate_change"
+    else:
+        key = "closing_disclosure_new" if diff_type == "new_on_cd" else "closing_disclosure_change"
+    config = PDF_COLOR_SCHEME[key]
+    return {
+        "key": key,
+        "rgb": tuple(channel / 255.0 for channel in config["rgb"]),
+        "hex": config["hex"],
+        "description": config["description"],
+    }
+
+
+def _build_highlight_requests(diff_summary: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    requests: Dict[str, List[Dict[str, Any]]] = {"loan_estimate": [], "closing_disclosure": []}
+    for entry in diff_summary:
+        diff_type = entry.get("diff_type")
+        if not diff_type:
+            continue
+
+        base_payload = {
+            "fee_name": entry.get("fee_name"),
+            "provider_name": entry.get("provider_name"),
+            "section": entry.get("section"),
+            "tolerance_category": entry.get("tolerance_category"),
+        }
+
+        row_hint: Optional[str] = None
+        for candidate in [entry.get("cd_label"), entry.get("le_label"), entry.get("fee_name")]:
+            if not candidate:
+                continue
+            match = re.match(r"^\s*(\d{2})\b", candidate)
+            if match:
+                row_hint = match.group(1)
+                break
+
+        if diff_type == "reclassified_off_borrower":
+            requests["loan_estimate"].append(
+                {
+                    **base_payload,
+                    "label": entry.get("le_label"),
+                    "amount": entry.get("le_amount"),
+                    "diff_type": "decrease",
+                    "doc_type": "loan_estimate",
+                    "row_hint": row_hint,
+                }
+            )
+            requests["closing_disclosure"].append(
+                {
+                    **base_payload,
+                    "label": entry.get("cd_label"),
+                    "amount": entry.get("reclassified_amount") or entry.get("cd_amount"),
+                    "diff_type": "decrease",
+                    "doc_type": "closing_disclosure",
+                    "row_hint": row_hint,
+                }
+            )
+            continue
+
+        if diff_type == "missing_on_cd":
+            payload = {
+                **base_payload,
+                "label": entry.get("le_label"),
+                "amount": entry.get("le_amount"),
+                "diff_type": diff_type,
+                "doc_type": "loan_estimate",
+                "row_hint": row_hint,
+            }
+            requests["loan_estimate"].append(payload)
+        elif diff_type == "new_on_cd":
+            payload = {
+                **base_payload,
+                "label": entry.get("cd_label"),
+                "amount": entry.get("cd_amount"),
+                "diff_type": diff_type,
+                "doc_type": "closing_disclosure",
+                "row_hint": row_hint,
+            }
+            requests["closing_disclosure"].append(payload)
+        else:
+            requests["loan_estimate"].append(
+                {
+                    **base_payload,
+                    "label": entry.get("le_label"),
+                    "amount": entry.get("le_amount"),
+                    "diff_type": diff_type,
+                    "doc_type": "loan_estimate",
+                    "row_hint": row_hint,
+                }
+            )
+            requests["closing_disclosure"].append(
+                {
+                    **base_payload,
+                    "label": entry.get("cd_label"),
+                    "amount": entry.get("cd_amount"),
+                    "diff_type": diff_type,
+                    "doc_type": "closing_disclosure",
+                    "row_hint": row_hint,
+                }
+            )
+    return requests
+
+
+def _score_line_for_targets(
+    line: Dict[str, Any],
+    primary_targets: List[str],
+    secondary_targets: List[str],
+    amount_digits: Optional[str],
+    *,
+    page_width: Optional[float] = None,
+    row_hint: Optional[str] = None,
+    section_hint: Optional[str] = None,
+    page_section_ranges: Optional[Dict[str, Tuple[float, float]]] = None,
+) -> float:
+    score = 0.0
+    fuzzy_text = line.get("fuzzy_text", "")
+    norm_text = line.get("norm_text", "")
+
+    for target in primary_targets:
+        norm_target = _normalize_for_fuzz(target)
+        if not norm_target:
+            continue
+        ratio = fuzz.partial_ratio(norm_target, fuzzy_text)
+        if ratio > score:
+            score = ratio
+
+        target_tokens = _tokenize_text(target)
+        if target_tokens and line.get("tokens"):
+            token_hits = sum(1 for token in target_tokens if token in line["tokens"])
+            if token_hits:
+                score += min(20, token_hits * 6)
+
+    for secondary in secondary_targets:
+        norm_secondary = _normalize_for_fuzz(secondary)
+        if not norm_secondary:
+            continue
+        ratio = fuzz.partial_ratio(norm_secondary, fuzzy_text)
+        score = max(score, ratio * 0.85)
+
+    if amount_digits and amount_digits in (line.get("digits") or ""):
+        score += 25
+        if page_width and page_width > 0:
+            right_ratio = (line.get("x1", 0.0) / page_width) if page_width else 0.0
+            if right_ratio >= 0.7:
+                score += 12
+
+    if row_hint and row_hint in line.get("tokens", []):
+        score += 10
+
+    if section_hint and page_section_ranges:
+        rng = page_section_ranges.get(section_hint.upper())
+        mid = line.get("mid_y")
+        if rng and mid is not None:
+            if rng[0] - 6 <= mid <= rng[1] + 6:
+                score += 12
+            else:
+                score -= 12
+
+    # penalty if no primary match context
+    if score < 50 and not amount_digits:
+        score *= 0.8
+
+    return score
+
+
+def _find_best_line_match(
+    pages: List[Dict[str, Any]],
+    primary_targets: List[str],
+    secondary_targets: List[str],
+    amount_digits: Optional[str],
+    *,
+    section_hint: Optional[str] = None,
+    row_hint: Optional[str] = None,
+    min_score: float = 60.0,
+) -> Optional[Dict[str, Any]]:
+    best: Optional[Dict[str, Any]] = None
+    for page in pages:
+        for line in page["lines"]:
+            if not line.get("norm_text"):
+                continue
+            score = _score_line_for_targets(
+                line,
+                primary_targets,
+                secondary_targets,
+                amount_digits,
+                page_width=page.get("width"),
+                row_hint=row_hint,
+                section_hint=section_hint,
+                page_section_ranges=page.get("section_ranges"),
+            )
+
+            if score < min_score:
+                continue
+
+            if best is None or score > best["score"]:
+                best = {
+                    "score": score,
+                    "page_index": page["index"],
+                    "line": line,
+                    "page": page,
+                }
+    return best
+
+
+def _build_annotations(
+    pdf_path: Path,
+    requests: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    pages = _extract_pdf_pages(pdf_path)
+    annotations: List[Dict[str, Any]] = []
+
+    def locate_amount_line(page: Dict[str, Any], base_line: Dict[str, Any], amount_digits: Optional[str]):
+        if not amount_digits:
+            return None
+        target_mid = base_line.get("mid_y")
+        if target_mid is None:
+            return None
+        for candidate in page["lines"]:
+            if candidate is base_line:
+                continue
+            if amount_digits not in (candidate.get("digits") or ""):
+                continue
+            candidate_mid = candidate.get("mid_y")
+            if candidate_mid is None:
+                continue
+            if abs(candidate_mid - target_mid) <= 3.5:
+                return candidate
+        return None
+
+    for request in requests:
+        label = request.get("label") or request.get("fee_name")
+        if not label:
+            continue
+        amount_digits = _normalize_amount_digits(request.get("amount"))
+        primary_targets = [request.get("label"), request.get("fee_name")]
+        secondary_targets = [
+            request.get("provider_name"),
+            f"section {request.get('section')}" if request.get("section") else "",
+            request.get("section"),
+            request.get("tolerance_category"),
+        ]
+        match = _find_best_line_match(
+            pages,
+            [t for t in primary_targets if t],
+            [t for t in secondary_targets if t],
+            amount_digits,
+            section_hint=request.get("section"),
+            row_hint=request.get("row_hint"),
+        )
+        if not match and amount_digits:
+            match = _find_best_line_match(
+                pages,
+                [],
+                [],
+                amount_digits,
+                section_hint=request.get("section"),
+                row_hint=request.get("row_hint"),
+                min_score=35,
+            )
+        if not match:
+            continue
+
+        amount_line = locate_amount_line(match["page"], match["line"], amount_digits)
+
+        color_info = _resolve_color(request["doc_type"], request["diff_type"])
+
+        line = match["line"]
+        page_height = match["page"]["height"]
+        padding = 2.5
+        x0 = line["x0"]
+        x1 = line["x1"]
+        top = line["top"]
+        bottom = line["bottom"]
+        if amount_line:
+            x0 = min(x0, amount_line["x0"])
+            x1 = max(x1, amount_line["x1"])
+            top = min(top, amount_line["top"])
+            bottom = max(bottom, amount_line["bottom"])
+        x0 = max(0.0, x0 - padding)
+        x1 = min(match["page"]["width"], x1 + padding)
+        top = max(0.0, top - padding)
+        bottom = min(match["page"]["height"], bottom + padding)
+        width = x1 - x0
+        height = bottom - top
+        y0 = page_height - bottom
+
+        annotations.append(
+            {
+                "page_index": match["page_index"],
+                "x0": x0,
+                "y0": y0,
+                "width": width,
+                "height": height,
+                "color": color_info["rgb"],
+                "color_hex": color_info["hex"],
+                "diff_type": request["diff_type"],
+                "label": label,
+            }
+        )
+
+    return annotations, pages
+
+
+def _draw_annotations(
+    source_pdf: Path,
+    annotations: List[Dict[str, Any]],
+    pages_meta: List[Dict[str, Any]],
+    output_pdf: Path,
+) -> None:
+    reader = PdfReader(str(source_pdf))
+    writer = PdfWriter()
+    grouped: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for annotation in annotations:
+        grouped[annotation["page_index"]].append(annotation)
+
+    for index, page in enumerate(reader.pages):
+        boxes = grouped.get(index)
+        if boxes:
+            packet = io.BytesIO()
+            page_meta = pages_meta[index]
+            canv = canvas.Canvas(packet, pagesize=(page_meta["width"], page_meta["height"]))
+            for box in boxes:
+                canv.setStrokeColorRGB(*box["color"])
+                canv.setLineWidth(1.8)
+                canv.rect(box["x0"], box["y0"], box["width"], box["height"], fill=0, stroke=1)
+            canv.save()
+            packet.seek(0)
+            overlay = PdfReader(packet)
+            page.merge_page(overlay.pages[0])
+        writer.add_page(page)
+
+    with output_pdf.open("wb") as buffer:
+        writer.write(buffer)
+
+
+def generate_pdf_highlights(
+    le_pdf_path: Optional[str],
+    cd_pdf_path: Optional[str],
+    diff_summary: Optional[List[Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    if not diff_summary:
+        return None
+
+    requests = _build_highlight_requests(diff_summary)
+    bundle: Dict[str, Any] = {
+        "legend": {
+            key: {"description": config["description"], "color": config["hex"]}
+            for key, config in PDF_COLOR_SCHEME.items()
+        }
+    }
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    if le_pdf_path and requests["loan_estimate"]:
+        source_path = Path(le_pdf_path)
+        output_path = source_path.with_name(f"{source_path.stem}_annotated_LE_{timestamp}.pdf")
+        annotations, pages_meta = _build_annotations(source_path, requests["loan_estimate"])
+        if annotations:
+            _draw_annotations(source_path, annotations, pages_meta, output_path)
+            bundle["loan_estimate"] = {
+                "source_pdf_path": str(source_path),
+                "highlighted_pdf_path": str(output_path),
+                "page_count": len(pages_meta),
+                "annotation_count": len(annotations),
+                "generated_at": datetime.now().isoformat(),
+            }
+
+    if cd_pdf_path and requests["closing_disclosure"]:
+        source_path = Path(cd_pdf_path)
+        output_path = source_path.with_name(f"{source_path.stem}_annotated_CD_{timestamp}.pdf")
+        annotations, pages_meta = _build_annotations(source_path, requests["closing_disclosure"])
+        if annotations:
+            _draw_annotations(source_path, annotations, pages_meta, output_path)
+            bundle["closing_disclosure"] = {
+                "source_pdf_path": str(source_path),
+                "highlighted_pdf_path": str(output_path),
+                "page_count": len(pages_meta),
+                "annotation_count": len(annotations),
+                "generated_at": datetime.now().isoformat(),
+            }
+
+    if not bundle.get("loan_estimate") and not bundle.get("closing_disclosure"):
+        return None
+
+    return bundle
 
 
 async def ai_match_fees(
@@ -505,6 +1264,84 @@ Return a TRIDComparison with matched_fees list and empty summary.
         if not isinstance(result_dict.get("summary"), dict):
             result_dict["summary"] = {}
 
+        matched_fee_dicts: List[Dict[str, Any]] = []
+        for fee in result_dict.get("matched_fees", []):
+            fee_dict = fee if isinstance(fee, dict) else fee.dict()  # type: ignore[arg-type]
+            chosen_flag = fee_dict.get("chosen_from_list")
+            if chosen_flag is None:
+                if fee_dict.get("le_amount") is None:
+                    chosen_flag = False
+                elif float(fee_dict.get("match_confidence") or 0.0) < 0.6:
+                    chosen_flag = False
+                else:
+                    chosen_flag = True
+            fee_dict["chosen_from_list"] = chosen_flag
+            fee_dict["changed_circumstance"] = bool(fee_dict.get("changed_circumstance"))
+            tolerance = classify_fee_tolerance(
+                fee_dict.get("section"),
+                fee_dict.get("le_label") or fee_dict.get("cd_label") or fee_dict.get("fee_name"),
+                fee_dict.get("chosen_from_list"),
+                fee_dict.get("changed_circumstance"),
+            )
+            fee_dict["tolerance_category"] = tolerance
+            matched_fee_dicts.append(fee_dict)
+
+        cd_index = _build_cd_label_index(cd_record)
+
+        def _mark_reclassified_off_borrower(matched: List[Dict[str, Any]]) -> None:
+            for entry in matched:
+                if entry.get("le_amount") is None or entry.get("cd_amount") is not None:
+                    continue
+                section = (entry.get("section") or "").upper()
+                if not section:
+                    continue
+                label = entry.get("le_label") or entry.get("cd_label") or entry.get("fee_name")
+                if not label:
+                    continue
+                key = f"{section}:{_normalize_label_for_key(label)}"
+                cd_entry = cd_index.get(key)
+                if not cd_entry:
+                    norm_target = _normalize_label_for_key(label)
+                    best_key: Optional[str] = None
+                    best_score = 0
+                    for idx_key, idx_entry in cd_index.items():
+                        if not idx_key.startswith(f"{section}:"):
+                            continue
+                        score = fuzz.token_set_ratio(norm_target, idx_key.split(":", 1)[1])
+                        if score > best_score:
+                            best_score = score
+                            best_key = idx_key
+                    if best_key and best_score >= 80:
+                        cd_entry = cd_index.get(best_key)
+                if not cd_entry:
+                    continue
+                if cd_entry["seller"] > 0:
+                    reclass_dest = "seller"
+                elif cd_entry["other"] > 0:
+                    reclass_dest = "other"
+                else:
+                    continue
+
+                entry["reclassified_to"] = reclass_dest
+                entry["reclassified_amount"] = cd_entry[reclass_dest]
+                if cd_entry.get("label"):
+                    entry["cd_label"] = cd_entry["label"]
+
+        _mark_reclassified_off_borrower(matched_fee_dicts)
+
+        result_dict["matched_fees"] = matched_fee_dicts
+
+        tolerance_metrics = compute_tolerance_metrics(matched_fee_dicts)
+        result_dict["summary"]["tolerance_summary"] = tolerance_metrics["bucket_totals"]
+        result_dict["summary"]["ten_percent_test"] = tolerance_metrics["ten_percent_test"]
+        if tolerance_metrics["ten_percent_test"]["cure_required"] > 0:
+            result_dict["summary"]["lender_credit_recommendation"] = {
+                "recommended_credit": tolerance_metrics["ten_percent_test"]["cure_required"],
+                "note": "Apply lender credit to cure 10% tolerance excess.",
+            }
+
+        result_dict["diff_summary"] = build_fee_diff_summary(matched_fee_dicts)
+
         return result_dict
 
     except Exception as e:  # noqa: BLE001
@@ -513,6 +1350,7 @@ Return a TRIDComparison with matched_fees list and empty summary.
             "matched_fees": [],
             "summary": {},
             "processed_at": datetime.now().isoformat(),
+            "diff_summary": [],
         }
 
 
@@ -730,6 +1568,9 @@ async def process_file(
     if not pdf_bytes:
         raise HTTPException(status_code=400, detail=f"Empty file: {file.filename}")
 
+    pdf_storage_path = storage / f"{base}.pdf"
+    pdf_storage_path.write_bytes(pdf_bytes)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         pdf_path = Path(tmpdir) / file.filename
         pdf_path.write_bytes(pdf_bytes)
@@ -762,6 +1603,7 @@ async def process_file(
         "json_path": str(json_path),
         "markdown_path": str(md_path) if md_path else None,
         "json_data": record,
+        "pdf_path": str(pdf_storage_path),
     }
 
 
@@ -831,6 +1673,8 @@ async def progress_generator(
 
         le_data: Optional[dict] = None
         cd_data: Optional[dict] = None
+        le_pdf_path: Optional[str] = None
+        cd_pdf_path: Optional[str] = None
 
         for output in outputs:
             doc_type = detect_document_type(output["json_data"])
@@ -838,10 +1682,12 @@ async def progress_generator(
 
             if doc_type == "loan_estimate":
                 le_data = output["json_data"]
+                le_pdf_path = output.get("pdf_path")
                 source_file = output["source_file"]
                 yield f"data: {json.dumps({'step': 'detection', 'message': f'Detected Loan Estimate: {source_file}'})}\n\n"
             elif doc_type == "closing_disclosure":
                 cd_data = output["json_data"]
+                cd_pdf_path = output.get("pdf_path")
                 source_file = output["source_file"]
                 yield f"data: {json.dumps({'step': 'detection', 'message': f'Detected Closing Disclosure: {source_file}'})}\n\n"
             else:
@@ -876,6 +1722,24 @@ async def progress_generator(
                 errors.append(f"Summary generation failed: {str(summary_error)}")
                 yield f"data: {json.dumps({'step': 'summary_error', 'message': str(summary_error)})}\n\n"
 
+        if trid_comparison and (le_pdf_path or cd_pdf_path):
+            yield f"data: {json.dumps({'step': 'pdf_highlight', 'message': 'Annotating PDFs with diff highlights'})}\n\n"
+            try:
+                pdf_highlights = await run_in_threadpool(
+                    generate_pdf_highlights,
+                    le_pdf_path,
+                    cd_pdf_path,
+                    trid_comparison.get("diff_summary"),
+                )
+                if pdf_highlights:
+                    trid_comparison["pdf_highlights"] = pdf_highlights
+                    yield f"data: {json.dumps({'step': 'pdf_highlight_complete', 'message': 'PDF highlights generated'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'step': 'pdf_highlight', 'message': 'No diff highlights needed'})}\n\n"
+            except Exception as highlight_error:  # noqa: BLE001
+                errors.append(f"PDF highlighting failed: {str(highlight_error)}")
+                yield f"data: {json.dumps({'step': 'pdf_highlight_error', 'message': str(highlight_error)})}\n\n"
+
         pdf_report_path: Optional[str] = None
         if trid_comparison and (le_data or cd_data):
             try:
@@ -909,6 +1773,7 @@ async def progress_generator(
                 "ai_matching_enabled": run_ai_matching,
                 "summary_generation_enabled": generate_summary,
                 "pdf_report_path": pdf_report_path,
+                "pdf_highlights_enabled": bool(trid_comparison and trid_comparison.get("pdf_highlights")),
             },
             "files": outputs,
             "trid_comparison": trid_comparison,
