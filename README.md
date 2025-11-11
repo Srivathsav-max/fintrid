@@ -158,5 +158,12 @@ flowchart TB
 * **Jaya Raj Srivathsav Adari**
 * **Abhishek Mamidipally**
 
+## Preview
+<img width="1856" height="1204" alt="image" src="https://github.com/user-attachments/assets/5b14e2e8-4254-440b-b994-1651fccc07e9" />
+<img width="1729" height="1227" alt="image" src="https://github.com/user-attachments/assets/1cbf2a80-5408-4e40-a20b-1afc2b4bc3d9" />
+<img width="1716" height="892" alt="image" src="https://github.com/user-attachments/assets/f5a56fc1-f9ee-4324-aff9-bfbde0afa5bb" />
+<img width="1636" height="874" alt="image" src="https://github.com/user-attachments/assets/8109a34a-3987-4f3b-8151-aa270c18bd61" />
+## Cure Document
+<img width="1319" height="950" alt="image" src="https://github.com/user-attachments/assets/cf9319aa-23fa-422a-ae54-930ba33df3b3" />
 
 **Fintrid** — built with ❤️ for compliance teams, auditors, and borrowers who deserve clarity and confidence in every closing.
