@@ -1,6 +1,6 @@
-# Fintrid – AI-Powered TRID Analysis Platform
+# Fintrid – AI-Powered TRID Analysis & Document Diff Platform
 
-Fintrid is an end-to-end platform for analyzing Loan Estimates (LE) and Closing Disclosures (CD) with AI to ensure TRID (TILA-RESPA Integrated Disclosure) compliance, catch costly tolerance violations, and explain complex loan terms in plain English.
+Fintrid is an **end-to-end AI platform** that analyzes Loan Estimates (LE) and Closing Disclosures (CD) for **TRID (TILA-RESPA Integrated Disclosure)** compliance, performs fee-level document diffing, and produces compliance-ready audit reports with visual highlights.
 
 > **Disclaimer:** Fintrid is a decision-support and review tool. It does **not** provide legal advice and does not replace required regulatory reviews.
 
@@ -8,43 +8,33 @@ Fintrid is an end-to-end platform for analyzing Loan Estimates (LE) and Closing 
 
 ## 🇺🇸 The Problem We’re Solving
 
-In the US mortgage market, TRID compliance is **high-stakes and painful**:
+TRID compliance in U.S. mortgage lending is **manual, error-prone, and expensive**:
 
-* **Manual, spreadsheet-driven reviews**
-  Compliance and closing teams still compare LEs and CDs by hand, line by line, across multiple pages and versions.
+* **Spreadsheet-based comparisons:** teams match fees line-by-line between LE and CD manually.
+* **Label chaos:** “01 Appraisal Fee to ABC” ≠ “Appraisal – ABC Appraisers.”
+* **Tolerance penalties:** Missing a 10% bucket breach triggers lender cures and findings.
+* **Scattered data:** PDFs, LOS exports, and Excel trackers—all disconnected.
+* **Borrower confusion:** fee changes and reclassifications are difficult to explain clearly.
 
-* **Fee label chaos**
-  The same fee appears as *“Appraisal Fee,” “01 Appraisal to ABC Appraisers,”* or “Appraisal – ABC,” making automated matching brittle and error-prone.
-
-* **Tolerance violations = real money**
-  Missing a zero-tolerance or 10%-tolerance breach can lead to:
-
-  * Cure/credits at closing
-  * Post-closing remediation
-  * Regulatory and investor findings
-
-* **No single source of truth**
-  Data lives in PDFs, emails, LOS exports, and ad-hoc Excel files. Every team “rebuilds” the same comparison.
-
-* **Borrower communication is hard**
-  Borrowers don’t understand why fees changed from LE to CD, and loan officers lack a clear, client-friendly explanation.
-
-Fintrid exists to **automate this entire workflow**, reduce risk, and give lenders and auditors a clear, defensible, AI-assisted comparison between LE and CD.
+Fintrid automates the entire pipeline—**from raw PDFs to AI-verified, color-highlighted comparisons and curated audit reports**.
 
 ---
 
-## ✅ What Fintrid Does
+## What Fintrid Does
 
-**In one pipeline, Fintrid:**
+**In one unified flow:**
 
-1. **Ingests mortgage PDFs** (Loan Estimates & Closing Disclosures)
-2. **Extracts structured data** using LandingAI + Google Gemini
-3. **Detects document type** (LE vs CD) automatically
-4. **AI-matches borrower-paid fees** between LE and CD (even with messy labels)
-5. **Checks TRID tolerance rules** (zero, 10%, unlimited)
-6. **Builds curated PDF reports** for compliance & audit
-7. **Generates an AI-written financial profile summary** that explains the loan, changes, and risks
+1. **Ingests PDFs** (Loan Estimates & Closing Disclosures)
+2. **Extracts structured data** using LandingAI + Gemini
+3. **Detects document type** (LE vs CD)
+4. **AI-matches borrower-paid fees**
+5. **Detects reclassified fees** (Borrower → Seller/Other)
+6. **Evaluates TRID tolerance buckets** (Zero / 10% / Unlimited)
+7. **Generates annotated PDF diffs** (visual fee highlights)
+8. **Builds curated compliance reports**
+9. *(Optional)* **Creates AI-written loan summaries** for easy review
 
+---
 
 ## ✨ Key Features
 
@@ -52,326 +42,117 @@ Fintrid exists to **automate this entire workflow**, reduce risk, and give lende
 
 * **PDF → Markdown → JSON**
 
-  * Uses **LandingAI ADE** to convert PDFs into markdown
-  * Uses **Google Gemini** (via LangChain) to extract into strict Pydantic models
+  * **LandingAI ADE** converts PDFs into structured Markdown.
+  * **Google Gemini 2.5 Pro** extracts fields into strict Pydantic models.
 * **Automatic document type detection**
 
-  * Distinguishes Loan Estimates from Closing Disclosures based on fee structure
-* **Parallel processing**
+  * Determines whether each file is an LE or CD by fee-structure heuristics.
+* **Parallel async pipeline**
 
-  * Handles multiple documents at once with async FastAPI endpoints
+  * FastAPI async I/O supports parallel uploads and progress streaming.
 
-### 🧠 AI-Powered Analysis
+---
 
-* **Intelligent fee matching**
+### 🧠 AI-Powered TRID Logic
 
-  * Matches **borrower-paid fees only** between LE and CD
-  * Handles noisy labels, prefixes (e.g., “01”), and provider names
-  * Computes a **match confidence score** per fee
-* **TRID tolerance categorization**
+* **Fee Matching & Normalization**
 
-  * Section A, B → **zero** tolerance
-  * Section C, E → **10%** tolerance
-  * Sections F, G, H → **unlimited** tolerance
-* **Financial profile summary (optional)**
+  * Matches **borrower-paid fees only**, even with inconsistent naming.
+  * Extracts provider names (e.g. “to ABC Appraisers Inc.”) for transparency.
+  * Generates **match-confidence scores** for audit traceability.
 
-  * AI-generated narrative covering:
+* **Reclassification Detection 🆕**
 
-    * Borrower & property overview
-    * Loan terms & structure
-    * Cost and cash-to-close analysis
-    * TRID compliance and tolerance breaches
-    * Key changes from LE → CD
-    * Risk & recommendations
+  * Detects when fees move off the borrower (→ Seller / Paid by Others).
+  * Marks them as **reclassified**, not missing, and highlights both LE & CD lines.
 
-### 📊 Reporting & UX
+* **Tolerance Classification**
 
-* **Curated TRID PDF report**
+  * Section A/B → **Zero**
+  * Section C (chosen-from-list) / E-Recording → **10%**
+  * Section F/G/H → **Unlimited**
+  * Handles E-split (Recording vs Transfer Taxes) and changed-circumstance overrides.
 
-  * Detailed fee comparison table (LE vs CD)
-  * Highlighted tolerance category & violation status
-  * Borrower-friendly explanation sections
-* **Interactive web UI (frontend)**
+* **Aggregate 10% Test & Cure**
 
-  * Upload and track processing in real time via **SSE streaming**
-  * Explore fee comparison tables
-  * View summary cards and analyticsx
+  * Aggregates B/C/E(Recording) fees, computes 110% limit, and flags required lender credits automatically.
 
-## 🛠️ Tech Stack
+---
 
-### Backend
+### 📘 Document Diff & Highlighting 🆕
 
-* **Framework**: FastAPI (async, type-safe)
-* **AI / LLM Orchestration**:
+* **Precise visual diffing**
 
-  * LandingAI ADE – PDF parsing
-  * Google Gemini 2.5 Pro – structured extraction & analysis
-  * LangChain – chains & structured outputs
-* **Data Modeling**: Pydantic v1 (LoanEstimateRecord, TRIDComparison, etc.)
-* **Reporting**: ReportLab (PDF generation via `generate_trid_curated_report.py`)
-* **Storage / DB**:
+  * Anchors highlights using **section headers**, **row numbers**, and **amount column position**.
+* **Color legend**
 
-  * File system storage for JSON/markdown/PDF
-  * PostgreSQL (via Drizzle ORM from the frontend)
+  * 🔵 LE Change 🟧 Missing on CD 🟣 CD Change 🟩 New on CD
+* **Reclassified Fees**
 
-### Frontend
+  * Dual highlights show LE borrower row and CD reclassified row together.
+* **Reliable matching**
 
-* **Framework**: Next.js 16 (App Router) + React 19
-* **Styling**: Tailwind CSS 4, shadcn/ui
-* **Data Tables**: Handsontable, TanStack Table
-* **ORM**: Drizzle (TypeScript models over PostgreSQL)
-* **Tooling**: Biome for linting & formatting
+  * Uses `pdfplumber` layout coordinates + fuzzy text/amount matching.
 
-## 📋 Prerequisites
+---
 
-* **Python**: 3.11+
-* **Node.js**: 18+ (or Bun)
-* **PostgreSQL**: 14+
-* **API keys**:
+### 📊 Reporting & Insights
 
-  * `LANDINGAI_API_KEY`
-  * `GOOGLE_API_KEY` (Gemini)
+* **Curated TRID PDF Report**
 
-## 🚀 Quick Start
+  * Tolerance tables, cure calculations, fee deltas, and compliance summary.
+* **AI Financial Profile Summary**
 
-### 1. Clone the Repository
+  * Gemini-authored narrative explaining borrower profile, loan terms, fee changes, and risks.
+* **Interactive Web UI**
 
-```bash
-git clone <repository-url>
-cd fintrid
-```
+  * Real-time SSE progress updates, side-by-side diff tables, and searchable fee lists.
 
-### 2. Backend Setup
+---
 
-```bash
-cd backend
+## 🔄 Updated End-to-End Pipeline
 
-# Recommended: uv
-uv sync
-
-# Or traditional venv + pip
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 3. Frontend Setup
-
-```bash
-cd frontend
-
-# Using Bun
-bun install
-# or
-npm install
-# or
-yarn install
-```
-
-### 4. Environment Variables
-
-Create `.env` in `backend/`:
-
-```env
-# API
-API_HOST=0.0.0.0
-API_PORT=8000
-API_RELOAD=false
-API_LOG_LEVEL=info
-
-# CORS
-CORS_ALLOW_ORIGINS=http://localhost:3000
-
-# Storage
-STORAGE_DIR=./storage
-
-# LandingAI
-LANDINGAI_API_KEY=your_landingai_api_key
-
-# Google Gemini
-GOOGLE_API_KEY=your_google_gemini_api_key
-```
-
-Create `.env.local` in `frontend/`:
-
-```env
-# Backend API URL
-NEXT_PUBLIC_API_URL=http://localhost:8000
-
-# Database
-DATABASE_URL=postgresql://user:password@localhost:5432/fintrid
-```
-
-### 5. Database (Frontend)
-
-```bash
-cd frontend
-
-bun run db:generate
-bun run db:push
-
-# Optional: Drizzle Studio
-bun run db:studio
-```
-
-### 6. Run Backend
-
-```bash
-cd backend
-uv run fintrid-api
-# or
-python -m fintrid_backend.main
-```
-
-Backend:
-
-* API root: [http://localhost:8000](http://localhost:8000)
-* Swagger docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-* ReDoc: [http://localhost:8000/redoc](http://localhost:8000/redoc)
-
-### 7. Run Frontend
-
-```bash
-cd frontend
-bun dev
-# or
-npm run dev
-```
-
-Frontend: [http://localhost:3000](http://localhost:3000)
+1. **Upload PDFs** – via `/api/extract/stream` or web UI
+2. **LandingAI Parsing** – PDF → Markdown
+3. **Gemini Extraction** – Markdown → Pydantic JSON
+4. **Doc Type Detection** – LE vs CD
+5. **AI Fee Matching** – borrower-paid normalization
+6. **Reclassification Indexing** 🆕 – detects payer shifts
+7. **Tolerance Evaluation** – zero/10%/unlimited + aggregate test
+8. **Diff Summary & PDF Highlights** 🆕 – visual comparison overlay
+9. **Curated Report & Financial Summary** – compliance PDF + AI narrative
 
 ---
 
 ## 📡 Core API Endpoints
 
-### `POST /api/extract/stream`
+*(Unchanged except for new outputs)*
 
-* Upload **one or more** PDFs (LE and/or CD)
-* Server-Sent Events (SSE) stream with steps such as:
+* **`POST /api/extract/stream`** – multi-file, live progress; emits new steps:
 
-  * `start`, `pdf_to_md`, `extraction_complete`
-  * `detecting`, `ai_matching`, `report_generation`, `summary_generation`
-* Final event includes:
+  * `pdf_highlight`, `pdf_highlight_complete`
+* **`POST /api/extract/pair`** – now returns `trid_comparison.pdf_highlights` bundle:
 
-  * `files` (metadata)
-  * `trid_comparison` (if LE & CD present)
-  * `financial_summary` (if enabled)
-  * `pdf_report_path`
-
-### `POST /api/extract/pair`
-
-* Expect **exactly two** PDF files (typically 1× LE, 1× CD)
-* Returns JSON:
-
-```jsonc
-{
-  "meta": { "...": "..." },
-  "files": [ /* each with json_data & paths */ ],
-  "trid_comparison": { /* matched_fees[], summary */ },
-  "errors": []
-}
-```
-
-### `POST /api/extract`
-
-* Process a **single** PDF (for raw extraction use cases)
-* Returns structured `LoanEstimateRecord` JSON
-
-### Common Query Parameters
-
-* `save_markdown` (bool, default: `true`) – persist intermediate `.md`
-* `landing_model` (str, default: `"dpt-2-latest"`)
-* `gemini_model` (str, default: `"gemini-2.5-pro"`)
-* `run_ai_matching` (bool) – run TRID fee matching (if LE+CD present)
-* `generate_summary` (bool) – generate financial profile summary
+  ```json
+  "pdf_highlights": {
+    "loan_estimate": { "highlighted_pdf_path": "..._LE_annotated.pdf" },
+    "closing_disclosure": { "highlighted_pdf_path": "..._CD_annotated.pdf" },
+    "legend": { "loan_estimate_change": {...}, "closing_disclosure_new": {...} }
+  }
+  ```
 
 ---
 
-## 📁 Project Layout
-
-```text
-fintrid/
-├── backend/
-│   ├── src/
-│   │   └── fintrid_backend/
-│   │       ├── main.py                       # FastAPI app & endpoints
-│   │       └── generate_trid_curated_report.py  # PDF report builder
-│   ├── storage/                              # JSON, markdown, PDFs
-│   ├── pyproject.toml
-│   └── requirements.txt
-│
-├── frontend/
-│   ├── src/
-│   │   ├── app/
-│   │   │   ├── page.tsx                      # Main upload / analysis page
-│   │   │   ├── data/page.tsx                 # Data explorer page
-│   │   │   └── api/
-│   │   │       ├── upload/route.ts           # Upload proxy
-│   │   │       └── trid-records/route.ts     # Persisted TRID records
-│   │   ├── components/
-│   │   │   ├── ui/                           # shadcn/ui primitives
-│   │   │   ├── handsontable/                 # Spreadsheet-like tables
-│   │   │   └── financial-summary-card.tsx
-│   │   ├── lib/
-│   │   │   ├── trid-transformer.ts           # Data transformation & mapping
-│   │   │   └── trid-rules.ts                 # TRID tolerance logic
-│   │   ├── db/
-│   │   │   ├── schema.ts                     # Drizzle schema
-│   │   │   └── index.ts                      # DB client
-│   │   └── types/
-│   │       ├── trid.ts                       # TRID domain types
-│   │       └── backend.ts                    # Backend API types
-│   ├── package.json
-│   └── drizzle.config.ts
-│
-└── README.md
-```
-
----
-
-## 🔄 Processing Pipeline (End-to-End)
-
-1. **Upload** – User uploads LE and/or CD PDFs via UI
-2. **LandingAI** – PDFs parsed into markdown
-3. **Gemini Extraction** – Markdown → `LoanEstimateRecord` JSON (Pydantic-validated)
-4. **Doc Detection** – Classify each record as LE, CD, or unknown
-5. **AI Fee Matching** – Borrower-paid fees mapped from LE → CD (`TRIDComparison`)
-6. **Tolerance Evaluation** – Zero / 10% / unlimited tolerance logic
-7. **Curated PDF Report** – Generated with detailed tables & status
-8. **Financial Summary** – Optional AI narrative for human-friendly review
-
----
-
-## 🧪 Development Workflows
-
-### Backend
+## 🧪 Dev Tips
 
 ```bash
-cd backend
-
-# Run with auto-reload
+# Backend hot-reload
 API_RELOAD=true uv run fintrid-api
 
-# Tests (if configured)
+# Run tests / format
 pytest
-
-# Lint / format (example)
-black src/
 ruff check src/
-```
-
-### Frontend
-
-```bash
-cd frontend
-
-bun dev          # or npm run dev
-bun run lint     # or npm run lint
-bun run format   # or npm run format
-
-# Database
-bun run db:generate
-bun run db:push
+black src/
 ```
 
 ---
@@ -383,4 +164,4 @@ bun run db:push
 
 ---
 
-Built with ❤️ for mortgage compliance teams, secondary marketing, auditors, and borrowers who deserve clarity.
+**Fintrid** — built with ❤️ for compliance teams, auditors, and borrowers who deserve clarity and confidence in every closing.
