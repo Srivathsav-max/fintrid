@@ -4,8 +4,6 @@ Fintrid is an **end-to-end AI platform** that analyzes Loan Estimates (LE) and C
 
 > **Disclaimer:** Fintrid is a decision-support and review tool. It does **not** provide legal advice and does not replace required regulatory reviews.
 
----
-
 ## 🇺🇸 The Problem We’re Solving
 
 TRID compliance in U.S. mortgage lending is **manual, error-prone, and expensive**:
@@ -17,8 +15,6 @@ TRID compliance in U.S. mortgage lending is **manual, error-prone, and expensive
 * **Borrower confusion:** fee changes and reclassifications are difficult to explain clearly.
 
 Fintrid automates the entire pipeline—**from raw PDFs to AI-verified, color-highlighted comparisons and curated audit reports**.
-
----
 
 ## What Fintrid Does
 
@@ -33,8 +29,6 @@ Fintrid automates the entire pipeline—**from raw PDFs to AI-verified, color-hi
 7. **Generates annotated PDF diffs** (visual fee highlights)
 8. **Builds curated compliance reports**
 9. *(Optional)* **Creates AI-written loan summaries** for easy review
-
----
 
 ## ✨ Key Features
 
@@ -51,9 +45,7 @@ Fintrid automates the entire pipeline—**from raw PDFs to AI-verified, color-hi
 
   * FastAPI async I/O supports parallel uploads and progress streaming.
 
----
-
-### 🧠 AI-Powered TRID Logic
+## 🧠 AI-Powered TRID Logic
 
 * **Fee Matching & Normalization**
 
@@ -77,9 +69,7 @@ Fintrid automates the entire pipeline—**from raw PDFs to AI-verified, color-hi
 
   * Aggregates B/C/E(Recording) fees, computes 110% limit, and flags required lender credits automatically.
 
----
-
-### 📘 Document Diff & Highlighting 🆕
+## 📘 Document Diff & Highlighting 🆕
 
 * **Precise visual diffing**
 
@@ -94,9 +84,8 @@ Fintrid automates the entire pipeline—**from raw PDFs to AI-verified, color-hi
 
   * Uses `pdfplumber` layout coordinates + fuzzy text/amount matching.
 
----
 
-### 📊 Reporting & Insights
+## 📊 Reporting & Insights
 
 * **Curated TRID PDF Report**
 
@@ -108,60 +97,65 @@ Fintrid automates the entire pipeline—**from raw PDFs to AI-verified, color-hi
 
   * Real-time SSE progress updates, side-by-side diff tables, and searchable fee lists.
 
----
+## Architecture
 
-## 🔄 Updated End-to-End Pipeline
-
-1. **Upload PDFs** – via `/api/extract/stream` or web UI
-2. **LandingAI Parsing** – PDF → Markdown
-3. **Gemini Extraction** – Markdown → Pydantic JSON
-4. **Doc Type Detection** – LE vs CD
-5. **AI Fee Matching** – borrower-paid normalization
-6. **Reclassification Indexing** 🆕 – detects payer shifts
-7. **Tolerance Evaluation** – zero/10%/unlimited + aggregate test
-8. **Diff Summary & PDF Highlights** 🆕 – visual comparison overlay
-9. **Curated Report & Financial Summary** – compliance PDF + AI narrative
-
----
-
-## 📡 Core API Endpoints
-
-*(Unchanged except for new outputs)*
-
-* **`POST /api/extract/stream`** – multi-file, live progress; emits new steps:
-
-  * `pdf_highlight`, `pdf_highlight_complete`
-* **`POST /api/extract/pair`** – now returns `trid_comparison.pdf_highlights` bundle:
-
-  ```json
-  "pdf_highlights": {
-    "loan_estimate": { "highlighted_pdf_path": "..._LE_annotated.pdf" },
-    "closing_disclosure": { "highlighted_pdf_path": "..._CD_annotated.pdf" },
-    "legend": { "loan_estimate_change": {...}, "closing_disclosure_new": {...} }
-  }
-  ```
-
----
-
-## 🧪 Dev Tips
-
-```bash
-# Backend hot-reload
-API_RELOAD=true uv run fintrid-api
-
-# Run tests / format
-pytest
-ruff check src/
-black src/
+```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}} }%%
+flowchart TB
+  %% Frontend Layer
+  subgraph FE["🎨 Frontend - Next.js 16 + React 19"]
+    UI["Upload Interface<br/>Diff Viewer<br/>Summary Dashboard"]
+  end
+  
+  %% Backend Layer
+  subgraph BE["⚙️ Backend API - FastAPI"]
+    API["REST Endpoints<br/>/extract, /stream"]
+    PIPELINE["Processing Pipeline"]
+  end
+  
+  %% Processing Steps
+  subgraph PROC["📋 Document Processing"]
+    PARSE["PDF → Markdown"]
+    EXTRACT["Markdown → JSON"]
+    ANALYZE["Fee Analysis<br/>TRID Tolerance<br/>Diff Generation"]
+  end
+  
+  %% External Services
+  subgraph EXT["☁️ AI Services"]
+    LANDING["LandingAI<br/>Document Parser"]
+    GEMINI["Gemini 2.5 Pro<br/>Data Extractor"]
+  end
+  
+  %% Storage
+  subgraph STORE["💾 Storage"]
+    FILES["Files<br/>PDFs, Reports"]
+    DB["PostgreSQL<br/>Drizzle ORM"]
+  end
+  
+  %% Flow
+  UI -->|Upload PDFs| API
+  API --> PIPELINE
+  PIPELINE --> PARSE
+  PARSE <-->|API Call| LANDING
+  PARSE --> EXTRACT
+  EXTRACT <-->|API Call| GEMINI
+  EXTRACT --> ANALYZE
+  ANALYZE --> FILES
+  ANALYZE --> DB
+  DB --> UI
+  FILES --> UI
+  
+  class FE,UI frontend
+  class BE,API,PIPELINE backend
+  class PROC,PARSE,EXTRACT,ANALYZE process
+  class EXT,LANDING,GEMINI external
+  class STORE,FILES,DB storage
 ```
-
----
 
 ## 👥 Contributors
 
 * **Jaya Raj Srivathsav Adari**
 * **Abhishek Mamidipally**
 
----
 
 **Fintrid** — built with ❤️ for compliance teams, auditors, and borrowers who deserve clarity and confidence in every closing.
