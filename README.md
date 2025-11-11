@@ -1,4 +1,5 @@
-# Fintrid – AI-Powered TRID Analysis & Document Diff Platform
+# Fintrid – AI-Powered TRID Analysis & Document Diff Platform 
+[![Watch the demo](https://img.shields.io/badge/YouTube-Demo-red?style=for-the-badge&logo=youtube)](https://youtu.be/5HzJYRIXMAk)
 
 Fintrid is an **end-to-end AI platform** that analyzes Loan Estimates (LE) and Closing Disclosures (CD) for **TRID (TILA-RESPA Integrated Disclosure)** compliance, performs fee-level document diffing, and produces compliance-ready audit reports with visual highlights.
 
