@@ -52,6 +52,7 @@ export interface RuleOptions {
   zeroThreshold?: number;
   reviewConfidenceFloor?: number;
   reviewConfidenceCeil?: number;
+  lenderCredits?: number;
 }
 
 export type TenPercentOverrideMap = Record<
@@ -65,6 +66,7 @@ const DEFAULTS: Required<RuleOptions> = {
   zeroThreshold: 1,
   reviewConfidenceFloor: 0.8,
   reviewConfidenceCeil: 0.93,
+  lenderCredits: 0,
 };
 
 const currency = (value: number) => Number(value.toFixed(2));
@@ -92,6 +94,7 @@ export const evaluateZeroTolerance = (
   options?: RuleOptions,
 ): ZeroToleranceResult => {
   const config = { ...DEFAULTS, ...options };
+  const lenderCredits = config.lenderCredits || 0;
 
   const evaluated = rows.map<ZeroToleranceDisplayRow>((row) => {
     const delta = borrowerDelta(row.le, row.cd);
@@ -131,6 +134,24 @@ export const evaluateZeroTolerance = (
       cureAmount,
     };
   });
+
+  const totalCureNeeded = currency(
+    evaluated.reduce((sum, row) => sum + row.cureAmount, 0),
+  );
+  
+  if (lenderCredits > 0 && totalCureNeeded > 0) {
+    evaluated.forEach((row) => {
+      if (row.cureAmount > 0 && lenderCredits >= totalCureNeeded) {
+        row.flags.push(
+          buildFlag(
+            "CURED_BY_LENDER",
+            `Overage offset by lender credit ($${lenderCredits.toFixed(2)})`,
+            "warning",
+          ),
+        );
+      }
+    });
+  }
 
   const subtotalLE = currency(
     evaluated.reduce((sum, row) => sum + row.le.borrower, 0),
@@ -176,7 +197,12 @@ export const evaluateTenPercent = (
 
     const flags: FlagDetail[] = [];
 
-    if (!effectiveOnWhitelist && !isRecording) {
+    const isLowConfidence = row.matchConfidence < config.reviewConfidenceFloor;
+    const needsReview =
+      row.matchConfidence >= config.reviewConfidenceFloor &&
+      row.matchConfidence < config.reviewConfidenceCeil;
+
+    if (!effectiveOnWhitelist && !isRecording && !needsReview && !isLowConfidence) {
       flags.push(
         buildFlag(
           "PROVIDER_OFF_LIST",
@@ -185,29 +211,29 @@ export const evaluateTenPercent = (
         ),
       );
     }
-
-    const needsReview =
-      row.matchConfidence >= config.reviewConfidenceFloor &&
-      row.matchConfidence < config.reviewConfidenceCeil;
+    
     if (needsReview) {
       flags.push(
         buildFlag(
           "LOW_CONFIDENCE",
-          `Match confidence ${Math.round(row.matchConfidence * 100)}%`,
+          `Match confidence ${Math.round(row.matchConfidence * 100)}% - Review`,
         ),
       );
     }
 
-    const inTenGroup: boolean = effectiveOnWhitelist || isRecording;
+    const inTenGroup: boolean = (effectiveOnWhitelist || isRecording) && !isLowConfidence;
+
+    let status: RowStatus = "PASS";
+    if (isLowConfidence || needsReview) {
+      status = "REVIEW";
+    } else if (!effectiveOnWhitelist && !isRecording) {
+      status = "REVIEW";
+    }
 
     return {
       ...row,
       delta,
-      status: needsReview
-        ? "REVIEW"
-        : effectiveOnWhitelist
-          ? "PASS"
-          : "REVIEW",
+      status,
       flags,
       effectiveOnWhitelist,
       inTenGroup,
@@ -223,7 +249,22 @@ export const evaluateTenPercent = (
   );
   const allowedMax = currency(leBase * 1.1);
   const overage = currency(Math.max(0, cdTotal - allowedMax));
-  const status = overage > 0 ? "OVER" : "PASS";
+  let status: "PASS" | "OVER" = overage > 0 ? "OVER" : "PASS";
+
+  const lenderCredits = config.lenderCredits || 0;
+  if (overage > 0 && lenderCredits >= overage) {
+    evaluated.forEach((row) => {
+      if (row.inTenGroup && row.delta > 0) {
+        row.flags.push(
+          buildFlag(
+            "CURED_BY_LENDER",
+            `10% overage offset by lender credit ($${lenderCredits.toFixed(2)})`,
+            "warning",
+          ),
+        );
+      }
+    });
+  }
 
   return {
     rows: evaluated,
@@ -249,6 +290,30 @@ export const evaluateUnlimited = (
           `${row.perDiemDays} per-diem days recorded`,
         ),
       );
+    }
+
+    if (
+      row.bucket === "F" && 
+      row.perDiemDays && 
+      row.loanAmount && 
+      row.interestRate &&
+      row.cd.borrower > 0
+    ) {
+      const expectedPerDiem = currency(
+        (row.loanAmount * row.interestRate / 100 / 365) * row.perDiemDays
+      );
+      const deviation = Math.abs(row.cd.borrower - expectedPerDiem);
+      const deviationPercent = (deviation / expectedPerDiem) * 100;
+      
+      if (deviationPercent > 10) {
+        flags.push(
+          buildFlag(
+            "PER_DIEM_INTEREST_DEVIATION",
+            `Expected ${formatUSD(expectedPerDiem)}, actual ${formatUSD(row.cd.borrower)} (${deviationPercent.toFixed(1)}% deviation)`,
+            "warning",
+          ),
+        );
+      }
     }
 
     if (row.bucket === "G" && row.escrowMonths && row.escrowMonths > 2) {
@@ -284,6 +349,13 @@ export const evaluateUnlimited = (
       status,
     };
   });
+};
+
+const formatUSD = (amount: number): string => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(amount);
 };
 
 export const collectExceptions = ({

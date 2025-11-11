@@ -2,11 +2,13 @@ export type RowStatus = "PASS" | "FAIL" | "REVIEW";
 
 export type ToleranceFlag =
   | "ZERO_LINE_OVERAGE"
+  | "CURED_BY_LENDER"
   | "SECTION_PLACEMENT_MISMATCH"
   | "PROVIDER_OFF_LIST"
   | "LOW_CONFIDENCE"
   | "OFF_LIST_EXCLUDED"
   | "PER_DIEM_OUTLIER"
+  | "PER_DIEM_INTEREST_DEVIATION"
   | "ESCROW_CUSHION_EXCEEDED"
   | "OPTIONALITY_MISMATCH";
 
@@ -50,6 +52,8 @@ export interface UnlimitedFee {
   escrowMonths?: number;
   isOptional?: boolean;
   lenderRequired?: boolean;
+  loanAmount?: number;
+  interestRate?: number;
 }
 
 export interface FlagDetail {

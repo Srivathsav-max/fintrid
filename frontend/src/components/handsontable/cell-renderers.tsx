@@ -180,24 +180,33 @@ export function providerRenderer(
   const effectiveOnWhitelist = instance.getDataAtRowProp(row, 'effectiveOnWhitelist') as boolean;
   const matchConfidence = instance.getDataAtRowProp(row, 'matchConfidence') as number;
   const provider = instance.getDataAtRowProp(row, 'provider') as string;
+  const status = instance.getDataAtRowProp(row, 'status') as RowStatus;
 
   const container = document.createElement('div');
   container.className = 'flex items-center gap-2 flex-wrap';
 
   const statusBadge = document.createElement('span');
-  const statusClass = effectiveOnWhitelist
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-    : 'border-amber-200 bg-amber-50 text-amber-800';
+  let statusClass = '';
+  let statusText = '';
+  
+  if (status === 'REVIEW') {
+    statusClass = 'border-amber-200 bg-amber-50 text-amber-800';
+    const confidencePercent = Math.round(matchConfidence * 100);
+    statusText = effectiveOnWhitelist 
+      ? `On-list? Review (${confidencePercent}%)`
+      : `Off-list (${confidencePercent}%)`;
+  } else if (effectiveOnWhitelist) {
+    statusClass = 'border-emerald-200 bg-emerald-50 text-emerald-800';
+    statusText = 'On-list';
+  } else {
+    statusClass = 'border-zinc-200 bg-zinc-50 text-zinc-700';
+    statusText = 'Off-list (Unlimited)';
+  }
+  
   statusBadge.className = `inline-flex items-center px-1.5 py-0 border text-[10px] rounded ${statusClass}`;
-  statusBadge.textContent = effectiveOnWhitelist ? 'On-list' : 'Off-list';
+  statusBadge.textContent = statusText;
+  statusBadge.title = `Match confidence: ${formatPercent(matchConfidence)}`;
   container.appendChild(statusBadge);
-
-  const confidenceBadge = document.createElement('span');
-  confidenceBadge.className =
-    'inline-flex items-center px-1.5 py-0 border border-zinc-300 text-[10px] rounded';
-  confidenceBadge.textContent = `Confidence ${formatPercent(matchConfidence)}`;
-  confidenceBadge.title = 'Vendor match confidence';
-  container.appendChild(confidenceBadge);
 
   td.innerHTML = '';
   td.appendChild(container);
@@ -213,12 +222,26 @@ export function tenGroupRenderer(
   value: boolean,
   cellProperties: any
 ) {
+  const status = instance.getDataAtRowProp(row, 'status') as RowStatus;
+  const matchConfidence = instance.getDataAtRowProp(row, 'matchConfidence') as number;
+  
   const badge = document.createElement('span');
-  const badgeClass = value
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-    : 'border-zinc-200 text-zinc-700';
+  let badgeClass = '';
+  let badgeText = '';
+  
+  if (value) {
+    badgeClass = 'border-emerald-200 bg-emerald-50 text-emerald-800';
+    badgeText = 'Yes';
+  } else if (status === 'REVIEW') {
+    badgeClass = 'border-amber-200 bg-amber-50 text-amber-800';
+    badgeText = 'No (Review)';
+  } else {
+    badgeClass = 'border-zinc-200 text-zinc-700';
+    badgeText = 'No';
+  }
+  
   badge.className = `inline-flex items-center px-1.5 py-0 border text-[10px] rounded ${badgeClass}`;
-  badge.textContent = value ? 'Yes' : 'No';
+  badge.textContent = badgeText;
 
   td.innerHTML = '';
   td.appendChild(badge);

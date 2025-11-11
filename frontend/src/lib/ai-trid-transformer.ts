@@ -63,7 +63,7 @@ function transformToZeroTolerance(fee: MatchedFee): ZeroToleranceFee {
   return {
     id: `ai-zero-${fee.section}-${sanitizeId(fee.fee_name)}`,
     fee: fee.is_new ? `${fee.fee_name} [NEW]` : fee.fee_name,
-    permittedToShop: fee.section === "B",
+    permittedToShop: false,
     le: {
       borrower: fee.le_amount ?? 0,
     },
@@ -75,9 +75,20 @@ function transformToZeroTolerance(fee: MatchedFee): ZeroToleranceFee {
 }
 
 function transformToTenPercent(fee: MatchedFee): TenPercentFee {
+  const isRecording = fee.fee_name.toLowerCase().includes("recording");
+  let displayName = fee.fee_name;
+  
+  if (isRecording) {
+    displayName = displayName
+      .replace(/\s+and\s+other\s+taxes?/gi, '')
+      .replace(/\s+and\s+taxes?/gi, '')
+      .replace(/recording fees?/gi, 'Recording Fees')
+      .trim();
+  }
+  
   return {
     id: `ai-ten-${fee.section}-${sanitizeId(fee.fee_name)}`,
-    fee: fee.is_new ? `${fee.fee_name} [NEW]` : fee.fee_name,
+    fee: fee.is_new ? `${displayName} [NEW]` : displayName,
     provider: fee.provider_name || extractProvider(fee.cd_label || fee.le_label || fee.fee_name),
     providerType: fee.section as "C" | "E",
     whitelistConfidence: fee.match_confidence,
@@ -90,7 +101,7 @@ function transformToTenPercent(fee: MatchedFee): TenPercentFee {
       borrower: fee.cd_amount ?? 0,
     },
     changeReason: calculateChangeReason(fee.le_amount ?? 0, fee.cd_amount ?? 0, fee.is_new),
-    isRecording: fee.fee_name.toLowerCase().includes("recording"),
+    isRecording,
   };
 }
 

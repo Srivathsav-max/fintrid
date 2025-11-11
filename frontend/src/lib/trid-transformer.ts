@@ -45,6 +45,16 @@ const getOtherAmount = (item: LineItem | undefined): number => {
   return 0;
 };
 
+const extractPerDiem = (feeName: string): number | undefined => {
+  const match = feeName.match(/(\d+)\s*(?:day|per.?diem)/i);
+  return match ? parseInt(match[1], 10) : undefined;
+};
+
+const extractEscrowMonths = (feeName: string): number | undefined => {
+  const match = feeName.match(/(\d+)\s*month/i);
+  return match ? parseInt(match[1], 10) : undefined;
+};
+
 export function transformSectionA(
   leData: LoanEstimateRecord | null,
   cdData: LoanEstimateRecord | null
@@ -217,7 +227,15 @@ export function transformTenPercent(
 
   itemMap.forEach((value, normalizedLabel) => {
     const isRecording = value.type === 'E';
-    const displayLabel = value.le?.label || value.cd?.label || normalizedLabel;
+    let displayLabel = value.le?.label || value.cd?.label || normalizedLabel;
+    
+    if (isRecording && displayLabel.toLowerCase().includes('recording')) {
+      displayLabel = displayLabel
+        .replace(/\s+and\s+other\s+taxes?/gi, '')
+        .replace(/\s+and\s+taxes?/gi, '')
+        .replace(/recording fees?/gi, 'Recording Fees')
+        .trim();
+    }
     
     result.push({
       id: `ten-${index++}`,
@@ -249,6 +267,9 @@ export function transformUnlimited(
   leData: LoanEstimateRecord | null,
   cdData: LoanEstimateRecord | null
 ): UnlimitedFee[] {
+  const loanAmount = cdData?.loan_terms?.loan_amount || leData?.loan_terms?.loan_amount || 0;
+  const interestRate = cdData?.loan_terms?.interest_rate_pct || leData?.loan_terms?.interest_rate_pct || 0;
+  
   const fItems = leData?.closing_cost_details?.other_costs?.F?.items || [];
   const gItems = leData?.closing_cost_details?.other_costs?.G?.items || [];
   const hItems = leData?.closing_cost_details?.other_costs?.H?.items || [];
@@ -380,6 +401,10 @@ export function transformUnlimited(
       },
       changeReason: '',
       isOptional: value.bucket === 'H',
+      perDiemDays: extractPerDiem(displayLabel),
+      escrowMonths: extractEscrowMonths(displayLabel),
+      loanAmount: loanAmount > 0 ? loanAmount : undefined,
+      interestRate: interestRate > 0 ? interestRate : undefined,
     });
   });
 

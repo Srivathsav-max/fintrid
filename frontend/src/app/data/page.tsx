@@ -109,17 +109,22 @@ export default function DataHandsontablePage() {
     }
   };
 
+  const lenderCredits = useMemo(() => {
+    const record = records.find((r) => r.id === selectedRecordId);
+    return record?.closingDisclosureData?.closing_cost_details?.other_costs?.lender_credits || 0;
+  }, [selectedRecordId, records]);
+
   const zeroA = useMemo(
-    () => evaluateZeroTolerance(dataset.origination, 'A'),
-    [dataset.origination]
+    () => evaluateZeroTolerance(dataset.origination, 'A', { lenderCredits }),
+    [dataset.origination, lenderCredits]
   );
   const zeroB = useMemo(
-    () => evaluateZeroTolerance(dataset.cannotShop, 'B'),
-    [dataset.cannotShop]
+    () => evaluateZeroTolerance(dataset.cannotShop, 'B', { lenderCredits }),
+    [dataset.cannotShop, lenderCredits]
   );
   const tenPercent = useMemo(
-    () => evaluateTenPercent(dataset.tenPercent, tenOverrides),
-    [dataset.tenPercent, tenOverrides]
+    () => evaluateTenPercent(dataset.tenPercent, tenOverrides, { lenderCredits }),
+    [dataset.tenPercent, tenOverrides, lenderCredits]
   );
   const unlimitedRows = useMemo(
     () => evaluateUnlimited(dataset.unlimited),
@@ -279,29 +284,51 @@ export default function DataHandsontablePage() {
           <div className="border-t border-zinc-200 dark:border-zinc-800 pt-6">
             <div className="flex flex-wrap items-baseline justify-between gap-4 mb-4">
               <div>
-                <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-1">
-                  Loan Estimate vs Closing Disclosure
-                </h2>
+                <div className="flex items-center gap-3 flex-wrap mb-1">
+                  <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
+                    Loan Estimate vs Closing Disclosure
+                  </h2>
+                  {selectedRecord?.loanEstimateData?.meta?.extracted_at && (
+                    <Badge variant="outline" className="text-xs">
+                      Baseline: LE {new Date(selectedRecord.loanEstimateData.meta.extracted_at).toLocaleDateString()}
+                    </Badge>
+                  )}
+                </div>
                 <p className="text-sm text-muted-foreground">
                   TRID tolerance validation and fee comparison
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
-                  Total Difference
-                </p>
-                <p className={`text-2xl font-bold mt-1 ${
-                  totalDifference > 0
-                    ? 'text-rose-600 dark:text-rose-400'
-                    : totalDifference < 0
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : 'text-zinc-900 dark:text-zinc-50'
-                }`}>
-                  {totalDifference > 0 ? '+' : ''}{formatUSD(totalDifference)}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  CD vs LE (borrower paid)
-                </p>
+              <div className="text-right space-y-3">
+                <div>
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
+                    Total Difference
+                  </p>
+                  <p className={`text-2xl font-bold mt-1 ${
+                    totalDifference > 0
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : totalDifference < 0
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-zinc-900 dark:text-zinc-50'
+                  }`}>
+                    {totalDifference > 0 ? '+' : ''}{formatUSD(totalDifference)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    CD vs LE (borrower paid)
+                  </p>
+                </div>
+                {lenderCredits > 0 && (
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
+                      Lender Credits
+                    </p>
+                    <p className="text-lg font-semibold text-emerald-600 dark:text-emerald-400 mt-1">
+                      {formatUSD(lenderCredits)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Available for cure
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
